@@ -24,17 +24,17 @@ Set verbosity level during processing:
  5 - Display raw and transformed JSON for each resource processed
  6 - Not for the faint of heart -- ALL info, including for skipped resources
 """
-verbosity = 3
+verbosity = 0
 
 # Set org/source ID, input periods, and map types
-org_id = 'PEPFAR-Test2'
-source_id = 'MER-Test2'
+org_id = 'PEPFAR-Test1'
+source_id = 'MER-Test1'
 periods = ['FY16', 'FY17', 'FY18', 'FY19', 'FY20']
 map_type_indicator_to_de = 'Has Data Element'
 map_type_de_to_coc = 'Has Option'
 
 # Set what the script outputs
-output_periods = ['FY18', 'FY19', 'FY20']
+output_periods = ['FY17', 'FY18', 'FY19', 'FY20']
 output_ocl_formatted_json = True
 include_new_org_json = True
 include_new_source_json = True
@@ -43,11 +43,12 @@ output_codelist_json = False
 
 # Metadata source files
 filename_datim_data_elements = 'data/datim_dataElements_20200107.json'
-filename_datim_codelists = 'data/codelists_RT_FY16_20.csv'
+filename_datim_codelists = 'data/codelists_RT_FY16_20_20200107.csv'
 filenames_mer_indicators = [
-    'data/mer_indicators_FY18.csv',
-    'data/mer_indicators_FY19.csv',
-    'data/mer_indicators_FY20.csv']
+    'data/mer_indicators_FY17_20200122.csv',
+    'data/mer_indicators_FY18_20200121.csv',
+    'data/mer_indicators_FY19_20200121.csv',
+    'data/mer_indicators_FY20_20200121.csv']
 filename_pdh = 'data/pdh.csv'
 
 

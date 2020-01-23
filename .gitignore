@@ -130,3 +130,4 @@ settings.local.py
 
 # Pyre type checker
 .pyre/
+.DS_Store
