@@ -8,6 +8,29 @@ import pprint
 import re
 
 
+def display_metadata_summary(verbosity=0, indicators=None, datim_de=None,
+                             codelists=None, sorted_indicators=None, pdh=None):
+    """ Displays summary of the loaded metadata """
+    print 'METADATA SOURCES:'
+    print '  Reference Indicators (FY18-20):', len(indicators)
+    if verbosity >= 5:
+        for indicator in indicators:
+            print '     ', indicator['id'], indicator['attr:Period'], indicator
+        print ''
+    print '  DATIM Data Elements (All):', len(datim_de['dataElements'])
+    print '  Code Lists (FY16-20):', len(codelists)
+    if verbosity >= 3:
+        for codelist in codelists:
+            print '    [ %s ]  %s  --  %s' % (
+                codelist['external_id'], codelist['id'], codelist['attr:Applicable Periods'])
+        print ''
+    print '  Unique Indicator Codes:', len(sorted_indicators)
+    if verbosity >= 3:
+        for indicator_code in sorted_indicators:
+            print '    ', indicator_code
+    # print 'PDH:', len(pdh)
+
+
 def get_new_org_json(org_id=''):
     """ Returns OCL-formatted JSON for the PEPFAR org """
     return {
@@ -353,3 +376,26 @@ def format_concept_id(unformatted_id):
     """
     return format_identifier(
         unformatted_id=unformatted_id.replace('+', ' plus '), replace_char='_')
+
+
+def dedup_list_of_dicts(dup_dict):
+    """
+    Dedup the import list without changing order
+    NOTE: More elegant solutions to de-duping all resulted in keeping only the last occurence of a resource,
+    where it is required that we keep only the first occurence of a resource, hence the custom solution.
+    APPROACH #1: This approach successfully de-duped, but took a very long time and kept only the last occurence
+    import_list_dedup = [i for n, i in enumerate(import_list) if i not in import_list[n + 1:]]
+    APPROACH #2: This approach successfully de-duped and ran quickly, but still kept only the last occurence
+    import_list_jsons = {json.dumps(resource, sort_keys=True) for resource in import_list}
+    import_list_dedup = [json.loads(resource) for resource in import_list_jsons]
+    APPROACH #3 used here:
+    Custom approach successfully de-duped, ran slightly slower than approach #2, & kept 1st occurence!
+    """
+    dedup_list = []
+    dedup_list_jsons = []
+    old_list_jsons = [json.dumps(resource, sort_keys=True) for resource in dup_dict]
+    for str_resource in old_list_jsons:
+        if str_resource not in dedup_list_jsons:
+            dedup_list_jsons.append(str_resource)
+            dedup_list.append(json.loads(str_resource))
+    return dedup_list

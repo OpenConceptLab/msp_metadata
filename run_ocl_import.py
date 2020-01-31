@@ -4,7 +4,7 @@ import settings
 
 
 # Settings
-json_filename = 'msp_full_import.json'
+json_filename = 'output/msp_full_FY17_20_20200127.json'
 api_url_root = 'https://api.staging.openconceptlab.org'
 ocl_api_token = settings.ocl_api_token
 do_local_import = False  # Instead of bulk import
@@ -25,4 +25,4 @@ else:  # Do bulk import
     import_request.raise_for_status()
     import_response = import_request.json()
     task_id = import_response['task']
-    print task_id
+    print 'Bulk Import Task ID:\n%s\n' % task_id
