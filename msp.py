@@ -6,12 +6,36 @@ import json
 import csv
 import pprint
 import re
+import requests
+
+
+# Constants for DATIM code list columns
+DATIM_CODELIST_COLUMN_DATASET = 0
+DATIM_CODELIST_COLUMN_DATA_ELEMENT_NAME = 1
+DATIM_CODELIST_COLUMN_DATA_ELEMENT_SHORT_NAME = 2
+DATIM_CODELIST_COLUMN_DATA_ELEMENT_CODE = 3
+DATIM_CODELIST_COLUMN_DATA_ELEMENT_UID = 4
+DATIM_CODELIST_COLUMN_DATA_ELEMENT_DESCRIPTION = 5
+DATIM_CODELIST_COLUMN_COC_NAME = 6
+DATIM_CODELIST_COLUMN_COC_CODE = 7
+DATIM_CODELIST_COLUMN_COC_UID = 8
+DATIM_CODELIST_COLUMNS = [
+    DATIM_CODELIST_COLUMN_DATASET,
+    DATIM_CODELIST_COLUMN_DATA_ELEMENT_NAME,
+    DATIM_CODELIST_COLUMN_DATA_ELEMENT_SHORT_NAME,
+    DATIM_CODELIST_COLUMN_DATA_ELEMENT_CODE,
+    DATIM_CODELIST_COLUMN_DATA_ELEMENT_UID,
+    DATIM_CODELIST_COLUMN_DATA_ELEMENT_DESCRIPTION,
+    DATIM_CODELIST_COLUMN_COC_NAME,
+    DATIM_CODELIST_COLUMN_COC_CODE,
+    DATIM_CODELIST_COLUMN_COC_UID,
+]
 
 
 def display_metadata_summary(verbosity=0, indicators=None, datim_de=None,
                              codelists=None, sorted_indicators=None, pdh=None):
     """ Displays summary of the loaded metadata """
-    print 'METADATA SOURCES:'
+    print 'LOAD METADATA SOURCES:'
     print '  Reference Indicators (FY18-20):', len(indicators)
     if verbosity >= 5:
         for indicator in indicators:
@@ -28,7 +52,6 @@ def display_metadata_summary(verbosity=0, indicators=None, datim_de=None,
     if verbosity >= 3:
         for indicator_code in sorted_indicators:
             print '    ', indicator_code
-    # print 'PDH:', len(pdh)
 
 
 def get_new_org_json(org_id=''):
@@ -72,6 +95,13 @@ def load_datim_data_elements(filename=''):
     return raw_datim_de
 
 
+def fetch_datim_codelist(url_datim):
+    """ Fetches a public codelist from DATIM (not from OCL) """
+    r = requests.get(url_datim)
+    r.raise_for_status()
+    return r.json()
+
+
 def load_codelists(filename='', org_id=''):
     """ Loads codelists and returns as OCL-formatted JSON """
     codelists = []
@@ -111,6 +141,30 @@ def load_pdh(filename=''):
         for row in reader:
             pdh.append(row)
     return pdh
+
+
+def get_data_element_numerator_or_denominator(de_code=''):
+    """
+    Returns 'Numerator' or 'Denominator', respectively, if '_N_' or '_D_' is
+    present in the data element code.
+    """
+    if '_N_' in de_code:
+        return 'Numerator'
+    elif '_D_' in de_code:
+        return 'Denominator'
+    return ''
+
+
+def get_data_element_support_type(de_code=''):
+    """
+    Returns fully specified PEPFAR support type based on the presence of one of
+    the acronyms in a data element code.
+    """
+    if '_TA_' in de_code:
+        return 'Technical Assistance'
+    elif '_DSD_' in de_code:
+        return 'Direct Service Delivery'
+    return ''
 
 
 def get_data_element_result_or_target(de_code=''):
@@ -178,11 +232,11 @@ def filter_de_code_lists(de, codelists_dict, display_debug_info=False):
     return de_codelists
 
 
-def get_de_periods_from_codelists(de_codelist_ids, codelists_dict):
+def get_de_periods_from_codelists(de_codelists, codelists_dict):
     """ Get a list of the periods present in the codelists """
     periods = {}
-    for codelist_id in de_codelist_ids:
-        for period in codelists_dict[codelist_id]['attr:Applicable Periods'].split(', '):
+    for codelist in de_codelists:
+        for period in codelists_dict[codelist['id']]['attr:Applicable Periods'].split(', '):
             periods[period] = True
     return periods.keys()
 
@@ -312,7 +366,8 @@ def get_codelist_references(filtered_csv_codelists=None, map_de_to_coc=None,
                 "owner": org_id,
                 'owner_type': 'Organization',
                 'collection': codelist['id'],
-                "data": {"expressions": ref_expressions}
+                "data": {"expressions": ref_expressions},
+                "__cascade": "sourcemappings",
             }
         # pprint.pprint(codelist)
         # pprint.pprint(codelist_references)
@@ -334,6 +389,7 @@ def get_repo_version_json(owner_type='Organization', owner_id='', repo_type='Sou
 
 
 def get_codelists_formatted_for_display(codelists):
+    """ Output a python dictionary of codelist definitions formatted for display in MSP """
     output_codelists = []
     for codelist in codelists:
         output_codelist = {
@@ -381,15 +437,18 @@ def format_concept_id(unformatted_id):
 def dedup_list_of_dicts(dup_dict):
     """
     Dedup the import list without changing order
-    NOTE: More elegant solutions to de-duping all resulted in keeping only the last occurence of a resource,
-    where it is required that we keep only the first occurence of a resource, hence the custom solution.
-    APPROACH #1: This approach successfully de-duped, but took a very long time and kept only the last occurence
-    import_list_dedup = [i for n, i in enumerate(import_list) if i not in import_list[n + 1:]]
-    APPROACH #2: This approach successfully de-duped and ran quickly, but still kept only the last occurence
-    import_list_jsons = {json.dumps(resource, sort_keys=True) for resource in import_list}
-    import_list_dedup = [json.loads(resource) for resource in import_list_jsons]
+    NOTE: More elegant solutions to de-duping all resulted in keeping only the last occurence
+    of a resource, where it is required that we keep only the first occurence of a resource,
+    hence the custom solution.
+    APPROACH #1: This approach successfully de-duped, but took a very long time and kept only
+    the last occurence
+        import_list_dedup = [i for n, i in enumerate(import_list) if i not in import_list[n + 1:]]
+    APPROACH #2: This successfully de-duped and ran quickly, but still kept only last occurence
+        import_list_jsons = {json.dumps(resource, sort_keys=True) for resource in import_list}
+        import_list_dedup = [json.loads(resource) for resource in import_list_jsons]
     APPROACH #3 used here:
-    Custom approach successfully de-duped, ran slightly slower than approach #2, & kept 1st occurence!
+    This custom approach (implemented below) successfully de-duped, ran slightly slower than
+    approach #2, though much faster than #1, and it kept the 1st occurence!
     """
     dedup_list = []
     dedup_list_jsons = []
@@ -399,3 +458,130 @@ def dedup_list_of_dicts(dup_dict):
             dedup_list_jsons.append(str_resource)
             dedup_list.append(json.loads(str_resource))
     return dedup_list
+
+
+def build_concept_from_datim_coc(coc_raw, org_id, source_id):
+    """ Return an OCL-formatted concept for the specified DATIM category option combo """
+    coc_concept = {
+        'type': 'Concept',
+        'id': coc_raw['id'],
+        'concept_class': 'Category Option Combo',
+        'datatype': 'None',
+        'owner': org_id,
+        'owner_type': 'Organization',
+        'source': source_id,
+        'retired': False,
+        'descriptions': None,
+        'external_id': coc_raw['id'],
+        'names': [
+            {
+                'name': coc_raw['name'],
+                'name_type': 'Fully Specified',
+                'locale': 'en',
+                'locale_preferred': True,
+                'external_id': None,
+            }
+        ]
+    }
+    return coc_concept
+
+
+def build_concept_from_datim_de(de_raw, org_id, source_id, sorted_indicators, codelists_dict):
+    """ Return an OCL-formatted concept for the specified DATIM data element """
+
+    # Set the concept ID and skip if data element 'code' not defined
+    if 'code' not in de_raw:
+        return -1
+
+    # Clean the data element code
+    de_concept_id_dirty = de_raw['code']
+    de_concept_id = format_concept_id(unformatted_id=de_raw['code'])
+
+    # Determine the indicator
+    de_indicator_code = lookup_indicator_code(
+        de_code=de_concept_id, sorted_indicators=sorted_indicators)
+    if not de_indicator_code:
+        return -2
+
+    # Determine data element attributes
+    de_result_or_target = get_data_element_result_or_target(de_code=de_concept_id)
+    de_numerator_or_denominator = get_data_element_numerator_or_denominator(de_code=de_concept_id)
+    de_version = get_data_element_version(de_code=de_concept_id)
+    de_support_type = get_data_element_support_type(de_code=de_concept_id)
+
+    # Build the concept
+    de_concept = {
+        'type': 'Concept',
+        'id': de_concept_id,
+        'concept_class': 'Data Element',
+        'datatype': 'Numeric',
+        'owner': org_id,
+        'owner_type': 'Organization',
+        'source': source_id,
+        'retired': False,
+        'external_id': de_raw['id'],
+        'descriptions': None,
+        'extras': {
+            'resultTarget': de_result_or_target,
+            'indicator': de_indicator_code,
+        },
+        'names': [
+            {
+                'name': de_raw['name'],
+                'name_type': 'Fully Specified',
+                'locale': 'en',
+                'locale_preferred': True,
+                'external_id': None,
+            },
+            {
+                'name': de_raw['shortName'],
+                'name_type': 'Short',
+                'locale': 'en',
+                'locale_preferred': False,
+                'external_id': None,
+            }
+        ]
+    }
+    if 'description' in de_raw and de_raw['description']:
+        de_concept['descriptions'] = [
+            {
+                'description': de_raw['description'],
+                'description_type': 'Description',
+                'locale': 'en',
+                'locale_preferred': True,
+                'external_id': None,
+            }
+        ]
+
+    # Process DE's dataSets and Code Lists
+    de_codelists = []
+    if 'dataSetElements' in de_raw and de_raw['dataSetElements']:
+        de_concept['extras']['dataSets'] = []
+        for dataset in de_raw['dataSetElements']:
+            de_concept['extras']['dataSets'].append(dataset['dataSet'])
+            if dataset['dataSet']['id'] in codelists_dict.keys():
+                de_codelists.append(dataset['dataSet'])
+                codelists_dict[dataset['dataSet']['id']]['__dataElements'].append(de_concept_id)
+        de_concept['extras']['codelists'] = de_codelists
+        de_concept['extras']['Applicable Periods'] = get_de_periods_from_codelists(
+            de_codelists=de_codelists, codelists_dict=codelists_dict)
+
+    # Set DE custom attributes
+    if 'dataElementGroups' in de_raw and de_raw['dataElementGroups']:
+        de_concept['extras']['dataElementGroups'] = de_raw['dataElementGroups']
+    if 'domainType' in de_raw and de_raw['domainType']:
+        de_concept['extras']['domainType'] = de_raw['domainType']
+    if 'valueType' in de_raw and de_raw['valueType']:
+        de_concept['extras']['valueType'] = de_raw['valueType']
+    if 'aggregationType' in de_raw and de_raw['aggregationType']:
+        de_concept['extras']['aggregationType'] = de_raw['aggregationType']
+    if de_version:
+        de_concept['extras']['DATIM Data Element Version'] = de_version
+    if de_numerator_or_denominator:
+        de_concept['extras']['numeratorDenominator'] = de_numerator_or_denominator
+    if de_support_type:
+        de_concept['extras']['pepfarSupportType'] = de_support_type
+    if de_concept_id != de_concept_id_dirty:
+        de_concept['extras']['unformatted_id'] = de_concept_id_dirty
+
+    return de_concept

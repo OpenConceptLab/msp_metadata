@@ -8,6 +8,13 @@ TO DO:
 * Retire concepts (Data Elements, Indicators, and COCs) from previous FY that are no longer used
 * Build "Replaced by" mappings to connect a new DE version to an older version
 
+Resolved:
+* Add "pepfarSupportType" attribute to DATIM DEs
+* Add "numeratorDenominator" attribute to DATIM DEs
+* Create collection versions by year for each code list
+* Add mappings to the code list collections by setting "cascade" to "sourcemappings"
+* Change DE "code_list_ids" to "codeLists" and copy the format of "dataSets"
+
 Example of getting indicator formulas (numerators and denominators)
 https://dev-de.datim.org/api/indicators?filter=name:like:VMMC&fields=id,code,name,numerator,denominator
 """
@@ -28,20 +35,20 @@ Set verbosity level during processing:
 verbosity = 0
 
 # Set org/source ID, input periods, and map types
-org_id = 'PEPFAR-Test3'
-source_id = 'MER-Test3'
-periods = ['FY16', 'FY17', 'FY18', 'FY19', 'FY20']
+org_id = 'PEPFAR-Test4'
+source_id = 'MER-Test4'
+periods = ['FY16', 'FY17', 'FY18', 'FY19', 'FY20']  # List of all input periods
 map_type_indicator_to_de = 'Has Data Element'
 map_type_de_to_coc = 'Has Option'
 
 # Set what the script outputs
 output_periods = ['FY17', 'FY18', 'FY19', 'FY20']
-output_ocl_formatted_json = True
-include_new_org_json = True
-include_new_source_json = True
+output_ocl_formatted_json = True  # Creates the OCL import JSON
+include_new_org_json = True  # Creates new org
+include_new_source_json = True  # Creates new source
 include_new_source_versions = True  # One source version per period
 include_new_codelist_versions = True  # One collection version per collection per period
-output_codelist_json = False
+output_codelist_json = False  # Outputs JSON for code lists to be used by MSP
 
 # Metadata source files
 filename_datim_data_elements = 'data/datim_dataElements_20200107.json'
@@ -55,7 +62,7 @@ filename_pdh = 'data/pdh.csv'
 
 
 """
-METADATA SOURCES: Load all metadata sources
+LOAD METADATA SOURCES
 
 Outputs:
 1. indicators -- MER Guidance Reference Indicators (FY18-20)
@@ -81,25 +88,20 @@ if verbosity:
                                  codelists=codelists, sorted_indicators=sorted_indicators, pdh=pdh)
 
 """
-PROCESSING: Process metadata sources to produce the following outputs:
-1. map_indicator_to_de -- Dictionary with indicator_code as key and list of data elements as value
-2. map_de_to_coc -- Dictionary with DE URL as key and list COC URLs as value
-2. de_concepts -- Dictionary with DE URL as key and transformed data element dictionary as value
-3. coc_concepts -- Dictionary wiht COC URL as key and transformed COC dictionary as value
-3. de_skipped_no_code -- List of raw DEs that have no 'code' attribute
-4. de_skipped_no_indicator -- List of raw DEs that did not map to an indicator code
-5. matched_codelists -- List of code lists that matched at least one processed DEs
-6. matched_periods -- List of periods (eg FY18) that had at least one matched DE
+PROCESS METADATA: Process metadata sources to produce the following outputs:
+1. de_concepts -- Dictionary with DE URL as key and transformed data element dictionary as value
+2. coc_concepts -- Dictionary wiht COC URL as key and transformed COC dictionary as value
+3. map_indicator_to_de -- Dictionary with indicator_code as key and list of data elements as value
+4. map_de_to_coc -- Dictionary with DE URL as key and list COC URLs as value
+5. de_skipped_no_code -- List of raw DEs that have no 'code' attribute
+6. de_skipped_no_indicator -- List of raw DEs that did not map to an indicator code
+7. matched_codelists -- List of code lists that matched at least one processed DEs
+8. matched_periods -- List of periods (eg FY18) that had at least one matched DE
+9. dirty_data_element_ids -- List of data element IDs with a code that needed to be reformatted
 """
-
-# Create a dictionary for indicator to DE maps pre-populated with indicator codes as keys
-map_indicator_to_de = {}
-for indicator_code in sorted_indicators:
-    map_indicator_to_de[indicator_code] = []
-
-# Process data elements
 de_concepts = {}
 coc_concepts = {}
+map_indicator_to_de = {}
 map_de_to_coc = {}
 de_skipped_no_code = []
 de_skipped_no_indicator = []
@@ -109,119 +111,46 @@ dirty_data_element_ids = []
 if verbosity >= 4:
     print '\nPROCESSING:'
 for de_raw in datim_de['dataElements']:
-    # Set the concept ID and skip if data element 'code' not defined
-    if 'code' not in de_raw:
-        de_skipped_no_code.append(de_raw)
-        if verbosity >= 6:
-            print '   SKIPPED: No Data Element Code\n    ', de_raw
-        continue
-    de_concept_id_dirty = de_raw['code']
-    de_concept_id = msp.format_concept_id(unformatted_id=de_raw['code'])
+    de_concept = msp.build_concept_from_datim_de(
+        de_raw, org_id, source_id, sorted_indicators, codelists_dict)
 
-    # Determine the indicator
-    de_indicator_code = msp.lookup_indicator_code(
-        de_code=de_concept_id, sorted_indicators=sorted_indicators)
-    if de_indicator_code:
-        map_indicator_to_de[de_indicator_code].append(de_concept_id)
-    else:
-        de_skipped_no_indicator.append(de_raw)
+    # Handle exceptions in data element creation
+    if not isinstance(de_concept, dict):
+        if de_concept == -1:
+            de_skipped_no_code.append(de_raw)
+            err_msg = 'SKIPPED: No Data Element Code'
+        elif de_concept == -2:
+            de_skipped_no_indicator.append(de_raw)
+            err_msg = 'SKIPPED: Data element prefix does not match an indicator code'
         if verbosity >= 6:
-            print '   SKIPPED: Data element prefix does not match an indicator code\n    %s  %s' % (
-                de_concept_id, de_raw)
+            print '   %s\n    ' % err_msg, de_raw
         continue
+    if verbosity >= 5:
+        print '     Raw-DE: ', de_raw
 
     # Add dirty ID that were not skipped to the dirty ID tracking list
+    de_concept_url = '/orgs/%s/sources/%s/concepts/%s/' % (org_id, source_id, de_concept['id'])
+    de_concept_id = de_concept['id']
+    de_concept_id_dirty = de_concept['extras'].get('unformatted_id', de_concept_id)
     if de_concept_id != de_concept_id_dirty:
         dirty_data_element_ids.append('Raw: %s != Clean: %s' % (de_concept_id_dirty, de_concept_id))
 
-    # Determine result or target
-    de_result_or_target = msp.get_data_element_result_or_target(de_code=de_concept_id)
-
-    # Determine DE version number (if it has one)
-    de_version = msp.get_data_element_version(de_code=de_concept_id)
-
-    # Display summary of data element being processed
-    if verbosity >= 4:
-        print '  ', de_indicator_code, de_concept_id, de_version, de_result_or_target
-
-    # Build the OCL-formatted data element
-    if verbosity >= 5:
-        print '     Raw-DE: ', de_raw
-    de_concept_url = '/orgs/%s/sources/%s/concepts/%s/' % (org_id, source_id, de_concept_id)
-    de_concept = {
-        'type': 'Concept',
-        'id': de_concept_id,
-        'concept_class': 'Data Element',
-        'datatype': 'Numeric',
-        'owner': org_id,
-        'owner_type': 'Organization',
-        'source': source_id,
-        'retired': False,
-        'external_id': de_raw['id'],
-        'descriptions': None,
-        'extras': {
-            'resultTarget': de_result_or_target,
-            'indicator': de_indicator_code,
-        },
-        'names': [
-            {
-                'name': de_raw['name'],
-                'name_type': 'Fully Specified',
-                'locale': 'en',
-                'locale_preferred': True,
-                'external_id': None,
-            },
-            {
-                'name': de_raw['shortName'],
-                'name_type': 'Short',
-                'locale': 'en',
-                'locale_preferred': False,
-                'external_id': None,
-            }
-        ]
-    }
-    if 'description' in de_raw and de_raw['description']:
-        de_concept['descriptions'] = [
-            {
-                'description': de_raw['description'],
-                'description_type': 'Description',
-                'locale': 'en',
-                'locale_preferred': True,
-                'external_id': None,
-            }
-        ]
-    if de_concept_id != de_concept_id_dirty:
-        de_concept['extras']['unformatted_id'] = de_concept_id_dirty
+    # Add indicator code to the map list
+    if 'indicator' in de_concept['extras']:
+        de_indicator_code = de_concept['extras']['indicator']
+        if de_indicator_code not in map_indicator_to_de:
+            map_indicator_to_de[de_indicator_code] = []
+        map_indicator_to_de[de_indicator_code].append(de_concept_id)
 
     # Process DE's dataSets and Code Lists
-    de_codelist_ids = []
-    if 'dataSetElements' in de_raw and de_raw['dataSetElements']:
-        de_concept['extras']['dataSets'] = []
-        for dataset in de_raw['dataSetElements']:
-            de_concept['extras']['dataSets'].append(dataset['dataSet'])
-            if dataset['dataSet']['id'] in codelists_dict.keys():
-                # print '\t', dataset['dataSet']
-                # print '\t', codelists_dict[dataset['dataSet']['id']]
-                de_codelist_ids.append(dataset['dataSet']['id'])
-                codelists_dict[dataset['dataSet']['id']]['__dataElements'].append(de_concept_id)
-        de_concept['extras']['code_list_ids'] = de_codelist_ids
-        de_concept['extras']['Applicable Periods'] = msp.get_de_periods_from_codelists(
-            de_codelist_ids=de_codelist_ids, codelists_dict=codelists_dict)
+    if 'Applicable Periods' in de_concept['extras']:
         matched_periods = list(set().union(
             matched_periods, de_concept['extras']['Applicable Periods']))
+    if 'codelists' in de_concept['extras']:
+        de_codelist_ids = []
+        for de_matched_codelist in de_concept['extras']['codelists']:
+            de_codelist_ids.append(de_matched_codelist['id'])
         matched_codelists = list(set().union(matched_codelists, de_codelist_ids))
-
-    # Set DE custom attributes
-    if 'dataElementGroups' in de_raw and de_raw['dataElementGroups']:
-        de_concept['extras']['dataElementGroups'] = de_raw['dataElementGroups']
-    if 'domainType' in de_raw and de_raw['domainType']:
-        de_concept['extras']['domainType'] = de_raw['domainType']
-    if 'valueType' in de_raw and de_raw['valueType']:
-        de_concept['extras']['valueType'] = de_raw['valueType']
-    if 'aggregationType' in de_raw and de_raw['aggregationType']:
-        de_concept['extras']['aggregationType'] = de_raw['aggregationType']
-    if de_version:
-        de_concept['extras']['DATIM Data Element Version'] = de_version
 
     # Save the data element
     de_concepts[de_concept_url] = de_concept
@@ -232,28 +161,11 @@ for de_raw in datim_de['dataElements']:
     if verbosity >= 5:
         print '     COCs:'
     for coc_raw in de_raw['categoryCombo']['categoryOptionCombos']:
+        # Generate the COC
         coc_concept_key = '/orgs/%s/sources/%s/concepts/%s/' % (org_id, source_id, coc_raw['id'])
-        coc_concept = {
-            'type': 'Concept',
-            'id': coc_raw['id'],
-            'concept_class': 'Category Option Combo',
-            'datatype': 'None',
-            'owner': org_id,
-            'owner_type': 'Organization',
-            'source': source_id,
-            'retired': False,
-            'descriptions': None,
-            'external_id': coc_raw['id'],
-            'names': [
-                {
-                    'name': coc_raw['name'],
-                    'name_type': 'Fully Specified',
-                    'locale': 'en',
-                    'locale_preferred': True,
-                    'external_id': None,
-                }
-            ]
-        }
+        coc_concept = msp.build_concept_from_datim_coc(coc_raw, org_id, source_id)
+
+        # Add COC to map arrays
         coc_concepts[coc_concept_key] = coc_concept
         if de_concept_url not in map_de_to_coc:
             map_de_to_coc[de_concept_url] = []
@@ -295,8 +207,8 @@ if verbosity:
                 print '    ', codelist
     num_indicators_with_de_maps = 0
     num_indicator_to_de_maps = 0
-    for indicator_code in map_indicator_to_de.keys():
-        if map_indicator_to_de[indicator_code]:
+    for indicator_code in map_indicator_to_de:
+        if indicator_code in map_indicator_to_de and map_indicator_to_de[indicator_code]:
             num_indicators_with_de_maps += 1
             num_indicator_to_de_maps += len(map_indicator_to_de[indicator_code])
     if verbosity >= 2:
@@ -304,17 +216,17 @@ if verbosity:
     print '  Indicators with DE Maps: %s indicator codes, %s maps' % (
         num_indicators_with_de_maps, num_indicator_to_de_maps)
     if verbosity >= 2:
-        for indicator_code in map_indicator_to_de.keys():
+        for indicator_code in map_indicator_to_de:
             if map_indicator_to_de[indicator_code]:
                 print '    %s (%s):' % (indicator_code, len(
                     map_indicator_to_de[indicator_code])), map_indicator_to_de[indicator_code]
     if verbosity >= 2:
         print ''
     print '  Indicators with no DE Maps: %s indicator codes' % str(
-        len(map_indicator_to_de) - num_indicators_with_de_maps)
+        len(sorted_indicators) - num_indicators_with_de_maps)
     if verbosity >= 2:
-        for indicator_code in map_indicator_to_de.keys():
-            if not map_indicator_to_de[indicator_code]:
+        for indicator_code in sorted_indicators:
+            if indicator_code not in map_indicator_to_de:
                 print '    %s' % indicator_code
 
 # Prepare for import by period
@@ -406,8 +318,8 @@ if output_ocl_formatted_json:
         if include_new_codelist_versions:
             for resource in filtered_codelists[period]:
                 import_list.append(msp.get_repo_version_json(
-                    owner_id=org_id, repo_type='Collection', repo_id=resource['id'], version_id=period,
-                    description='Auto-generated %s' % period))
+                    owner_id=org_id, repo_type='Collection', repo_id=resource['id'],
+                    version_id=period, description='Auto-generated %s' % period))
 
     # Dedup the import list without changing order
     import_list_dedup = msp.dedup_list_of_dicts(import_list)

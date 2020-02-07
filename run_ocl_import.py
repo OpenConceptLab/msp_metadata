@@ -1,10 +1,12 @@
-import json
+"""
+Imports a JSON lines file into OCL
+"""
 import ocldev.oclfleximporter
 import settings
 
 
 # Settings
-json_filename = 'output/msp_full_FY17_20_20200127.json'
+json_filename = 'output/msp_full_FY17_20_20200207.json'
 api_url_root = 'https://api.staging.openconceptlab.org'
 ocl_api_token = settings.ocl_api_token
 do_local_import = False  # Instead of bulk import
