@@ -4,17 +4,22 @@ import pprint
 
 
 # Settings
-results_filename = 'logs/import_results_staging_PEPFAR_Test1_20200124.json'
+results_filename = 'logs/import_results_staging_PEPFAR_Test4_20200207.json'
 
-# Use this to move results into an OclImportResults object
+# Load results into an OclImportResults object
 with open(results_filename) as ifile:
 	results = json.load(ifile)
 import_results = ocldev.oclfleximporter.OclImportResults.load_from_json(results)
 
-logging_keys = import_results.get_logging_keys()
-stats = import_results.get_stats()
+# Do this first
+print('IMPORT STATS:')
+pprint.pprint(import_results.get_stats())
+print import_results.get_import_results(
+	results_mode=ocldev.oclfleximporter.OclImportResults.OCL_IMPORT_RESULTS_MODE_SUMMARY)
+exit()
 
-pprint.pprint(stats)
+logging_keys = import_results.get_logging_keys()
+
 # pprint.pprint(logging_keys)
 root_key = '/orgs/PEPFAR-Test1/sources/MER-Test1/'
 print import_results.get_import_results(

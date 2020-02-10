@@ -1,5 +1,5 @@
 """
-Prepares MSP metadata for import
+Prepares DATIM metadata for import into OCL
 
 Questions:
 1. How to handle periods for targets (COP19) vs. results (FY19)
@@ -38,8 +38,7 @@ verbosity = 0
 org_id = 'PEPFAR-Test4'
 source_id = 'MER-Test4'
 periods = ['FY16', 'FY17', 'FY18', 'FY19', 'FY20']  # List of all input periods
-map_type_indicator_to_de = 'Has Data Element'
-map_type_de_to_coc = 'Has Option'
+pdh_num_run_sequences = 3  # Number of run sequences for processing PDH derived DEs
 
 # Set what the script outputs
 output_periods = ['FY17', 'FY18', 'FY19', 'FY20']
@@ -58,7 +57,7 @@ filenames_mer_indicators = [
     'data/mer_indicators_FY18_20200121.csv',
     'data/mer_indicators_FY19_20200121.csv',
     'data/mer_indicators_FY20_20200121.csv']
-filename_pdh = 'data/pdh.csv'
+filename_pdh = 'data/pdh_20200105.csv'
 
 
 """
@@ -68,7 +67,7 @@ Outputs:
 1. indicators -- MER Guidance Reference Indicators (FY18-20)
 2. datim_de -- DATIM Data Elements with their disags as sub-resources (<=FY20)
 3. codelists -- Code lists (FY16-20)
-4. pdh -- PDH (<=FY19)
+4. pdh_raw -- PDH (<=FY19)
 
 Pre-process indicators and codelists, resulting in:
 5. sorted_indicators -- Sorted and De-duped list of indicator codes
@@ -80,19 +79,20 @@ sorted_indicators = msp.get_sorted_unique_indicator_codes(indicators=indicators)
 datim_de = msp.load_datim_data_elements(filename=filename_datim_data_elements)
 codelists = msp.load_codelists(filename=filename_datim_codelists, org_id=org_id)
 codelists_dict = msp.build_codelists_dict(codelists=codelists)
-pdh = None  # pdh = msp.load_pdh(filename=filename_pdh)
+pdh_raw = msp.load_pdh(filename=filename_pdh)
 
 # Summarize metadata loaded
 if verbosity:
-    msp.display_metadata_summary(verbosity=verbosity, indicators=indicators, datim_de=datim_de,
-                                 codelists=codelists, sorted_indicators=sorted_indicators, pdh=pdh)
+    msp.display_input_metadata_summary(
+        verbosity=verbosity, indicators=indicators, datim_de=datim_de,
+        codelists=codelists, sorted_indicators=sorted_indicators, pdh_raw=pdh_raw)
 
 """
-PROCESS METADATA: Process metadata sources to produce the following outputs:
+PROCESS DATIM METADATA -- Process DATIM metadata sources to produce the following outputs:
 1. de_concepts -- Dictionary with DE URL as key and transformed data element dictionary as value
 2. coc_concepts -- Dictionary wiht COC URL as key and transformed COC dictionary as value
-3. map_indicator_to_de -- Dictionary with indicator_code as key and list of data elements as value
-4. map_de_to_coc -- Dictionary with DE URL as key and list COC URLs as value
+3. map_indicator_to_de -- Dictionary with indicator_code as key and list of data element IDs as value
+4. map_de_to_coc -- Dictionary with DE URL as key and list of COC URLs as value
 5. de_skipped_no_code -- List of raw DEs that have no 'code' attribute
 6. de_skipped_no_indicator -- List of raw DEs that did not map to an indicator code
 7. matched_codelists -- List of code lists that matched at least one processed DEs
@@ -128,14 +128,14 @@ for de_raw in datim_de['dataElements']:
     if verbosity >= 5:
         print '     Raw-DE: ', de_raw
 
-    # Add dirty ID that were not skipped to the dirty ID tracking list
+    # Add dirty ID to the dirty ID tracking list
     de_concept_url = '/orgs/%s/sources/%s/concepts/%s/' % (org_id, source_id, de_concept['id'])
     de_concept_id = de_concept['id']
     de_concept_id_dirty = de_concept['extras'].get('unformatted_id', de_concept_id)
     if de_concept_id != de_concept_id_dirty:
         dirty_data_element_ids.append('Raw: %s != Clean: %s' % (de_concept_id_dirty, de_concept_id))
 
-    # Add indicator code to the map list
+    # Add data element to the indicator-->data element map list
     if 'indicator' in de_concept['extras']:
         de_indicator_code = de_concept['extras']['indicator']
         if de_indicator_code not in map_indicator_to_de:
@@ -176,58 +176,51 @@ for de_raw in datim_de['dataElements']:
     if verbosity >= 5:
         print '     All COC keys for this DE:', map_de_to_coc[de_concept_url]
 
-# Summarize all results
+# Summarize results of processing all DATIM data elements
 if verbosity:
-    print '\nSUMMARY RESULTS:'
-    print '  Data elements skipped:', len(de_skipped_no_code) + len(de_skipped_no_indicator)
-    print '    Data elements with no code:', len(de_skipped_no_code)
-    if verbosity >= 2:
-        for de_skipped in de_skipped_no_code:
-            print '      ', de_skipped
-    print '    Indicator codes not matched:', len(de_skipped_no_indicator)
-    print '  Data elements transformed:', len(de_concepts)
-    print '  Dirty data element IDs:', len(dirty_data_element_ids)
-    if verbosity >= 2:
-        for dirty_id in dirty_data_element_ids:
-            print '    ', dirty_id
-    print '  Matched Periods:', matched_periods
-    if verbosity >= 2:
-        print ''
-    print '  Code Lists with Data Elements:', len(matched_codelists)
-    if verbosity >= 2:
-        for codelist in codelists:
-            if codelist['external_id'] in matched_codelists:
-                print '    ', codelist
-    if verbosity >= 2:
-        print ''
-    print '  Code Lists with No Data Elements:', len(codelists) - len(matched_codelists)
-    if verbosity >= 2:
-        for codelist in codelists:
-            if codelist['external_id'] not in matched_codelists:
-                print '    ', codelist
-    num_indicators_with_de_maps = 0
-    num_indicator_to_de_maps = 0
-    for indicator_code in map_indicator_to_de:
-        if indicator_code in map_indicator_to_de and map_indicator_to_de[indicator_code]:
-            num_indicators_with_de_maps += 1
-            num_indicator_to_de_maps += len(map_indicator_to_de[indicator_code])
-    if verbosity >= 2:
-        print ''
-    print '  Indicators with DE Maps: %s indicator codes, %s maps' % (
-        num_indicators_with_de_maps, num_indicator_to_de_maps)
-    if verbosity >= 2:
-        for indicator_code in map_indicator_to_de:
-            if map_indicator_to_de[indicator_code]:
-                print '    %s (%s):' % (indicator_code, len(
-                    map_indicator_to_de[indicator_code])), map_indicator_to_de[indicator_code]
-    if verbosity >= 2:
-        print ''
-    print '  Indicators with no DE Maps: %s indicator codes' % str(
-        len(sorted_indicators) - num_indicators_with_de_maps)
-    if verbosity >= 2:
-        for indicator_code in sorted_indicators:
-            if indicator_code not in map_indicator_to_de:
-                print '    %s' % indicator_code
+    msp.display_processing_summary(
+        verbosity=verbosity, de_concepts=de_concepts,
+        de_skipped_no_code=de_skipped_no_code,
+        de_skipped_no_indicator=de_skipped_no_indicator,
+        dirty_data_element_ids=dirty_data_element_ids,
+        codelists=codelists,
+        matched_periods=matched_periods,
+        matched_codelists=matched_codelists,
+        map_indicator_to_de=map_indicator_to_de,
+        sorted_indicators=sorted_indicators)
+
+"""
+PROCESS PDH METADATA -- Process PDH metadata source to produce the following outputs:
+1. pdh_de_concepts -- List of unique OCL-formatted PDH derived data elements
+2. pdh_de_concept_ids -- List of unique PDH derived data element IDs
+"""
+pdh_de_concepts = []
+pdh_de_concept_ids = []
+
+# Iterate thru PDH rows once per run sequence
+for i in range(pdh_num_run_sequences):
+    current_run_sequence_str = str(i + 1)
+    for pdh_row in pdh_raw:
+        # Skip data elements directly from DATIM or in a different run sequence
+        if pdh_row['source_srgt_key'] == '1' or pdh_row['Derived_level_run_seq'] != current_run_sequence_str:
+            continue
+
+        # Build the PDH derived data element concept
+        de_concept_id = pdh_row['derived_data_element_uid']
+        if de_concept_id not in pdh_de_concept_ids:
+            de_concept = msp.build_concept_from_pdh_de(pdh_row, org_id, source_id)
+            pdh_de_concept_ids.append(de_concept_id)
+            pdh_de_concepts.append(de_concept)
+
+        # Check if COCs exists
+        pdh_derived_coc_concept_key = '/orgs/%s/sources/%s/concepts/%s/' % (
+            org_id, source_id, pdh_row['derived_category_option_combo'])
+        pdh_source_coc_concept_key = '/orgs/%s/sources/%s/concepts/%s/' % (
+            org_id, source_id, pdh_row['source_category_option_combo_uid'])
+        if pdh_derived_coc_concept_key not in coc_concepts:
+            print 'Missing derived COC:', pdh_derived_coc_concept_key
+        if pdh_source_coc_concept_key not in coc_concepts:
+            print 'Missing source COC:', pdh_source_coc_concept_key
 
 # Prepare for import by period
 filtered_indicators = {}
@@ -259,10 +252,10 @@ for period in periods:
         data_elements=filtered_de[period], map_de_to_coc=map_de_to_coc, coc_concepts=coc_concepts)
     filtered_maps_indicator_to_de[period] = msp.get_indicator_to_de_maps(
         filtered_de=filtered_de[period], org_id=org_id, source_id=source_id,
-        map_type_indicator_to_de=map_type_indicator_to_de)
+        map_type_indicator_to_de=msp.MSP_MAP_TYPE_INDICATOR_TO_DE)
     filtered_maps_de_to_coc[period] = msp.get_de_to_disag_maps(
         filtered_de=filtered_de[period], map_de_to_coc=map_de_to_coc,
-        org_id=org_id, source_id=source_id, map_type_de_to_coc=map_type_de_to_coc)
+        org_id=org_id, source_id=source_id, map_type_de_to_coc=msp.MSP_MAP_TYPE_DE_TO_COC)
     filtered_codelist_references[period] = msp.get_codelist_references(
         filtered_csv_codelists=filtered_csv_codelists, map_de_to_coc=map_de_to_coc,
         org_id=org_id, source_id=source_id)
