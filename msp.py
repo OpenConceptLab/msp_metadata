@@ -9,6 +9,14 @@ import re
 import requests
 
 
+# Constants for OCL mappings
+MSP_MAP_TYPE_INDICATOR_TO_DE = 'Has Data Element'
+MSP_MAP_TYPE_DE_TO_COC = 'Has Option'
+MSP_MAP_TYPES = [
+    MSP_MAP_TYPE_INDICATOR_TO_DE,
+    MSP_MAP_TYPE_DE_TO_COC,
+]
+
 # Constants for DATIM code list columns
 DATIM_CODELIST_COLUMN_DATASET = 0
 DATIM_CODELIST_COLUMN_DATA_ELEMENT_NAME = 1
@@ -32,26 +40,93 @@ DATIM_CODELIST_COLUMNS = [
 ]
 
 
-def display_metadata_summary(verbosity=0, indicators=None, datim_de=None,
-                             codelists=None, sorted_indicators=None, pdh=None):
+def display_input_metadata_summary(verbosity=1, indicators=None, datim_de=None,
+                                   codelists=None, sorted_indicators=None, pdh_raw=None):
     """ Displays summary of the loaded metadata """
     print 'LOAD METADATA SOURCES:'
-    print '  Reference Indicators (FY18-20):', len(indicators)
-    if verbosity >= 5:
-        for indicator in indicators:
-            print '     ', indicator['id'], indicator['attr:Period'], indicator
+    if indicators:
+        print '  Reference Indicators (FY18-20):', len(indicators)
+        if verbosity >= 5:
+            for indicator in indicators:
+                print '     ', indicator['id'], indicator['attr:Period'], indicator
+            print ''
+    if datim_de:
+        print '  DATIM Data Elements (All):', len(datim_de['dataElements'])
+    if codelists:
+        print '  Code Lists (FY16-20):', len(codelists)
+        if verbosity >= 3:
+            for codelist in codelists:
+                print '    [ %s ]  %s  --  %s' % (
+                    codelist['external_id'], codelist['id'],
+                    codelist['attr:Applicable Periods'])
+            print ''
+    if sorted_indicators:
+        print '  Unique Indicator Codes:', len(sorted_indicators)
+        if verbosity >= 3:
+            for indicator_code in sorted_indicators:
+                print '    ', indicator_code
+    if pdh_raw:
+        print '  PDH Rows:', len(pdh_raw)
+
+
+def display_processing_summary(verbosity=1, de_concepts=None, de_skipped_no_code=None,
+                               de_skipped_no_indicator=None, dirty_data_element_ids=None,
+                               codelists=None, matched_periods=None,
+                               matched_codelists=None, map_indicator_to_de=None,
+                               sorted_indicators=None):
+    """ Display a summary of the result of processing DATIM metadata """
+    print '\nSUMMARY OF RESULTS FROM PROCESSING METADATA:'
+    print '  Data elements skipped:', len(de_skipped_no_code) + len(de_skipped_no_indicator)
+    print '    Data elements with no code:', len(de_skipped_no_code)
+    if verbosity >= 2:
+        for de_skipped in de_skipped_no_code:
+            print '      ', de_skipped
+    print '    Indicator codes not matched:', len(de_skipped_no_indicator)
+    print '  Data elements transformed:', len(de_concepts)
+    print '  Dirty data element IDs:', len(dirty_data_element_ids)
+    if verbosity >= 2:
+        for dirty_id in dirty_data_element_ids:
+            print '    ', dirty_id
+    print '  Matched Periods:', matched_periods
+    if verbosity >= 2:
         print ''
-    print '  DATIM Data Elements (All):', len(datim_de['dataElements'])
-    print '  Code Lists (FY16-20):', len(codelists)
-    if verbosity >= 3:
+    print '  Code Lists with Data Elements:', len(matched_codelists)
+    if verbosity >= 2:
         for codelist in codelists:
-            print '    [ %s ]  %s  --  %s' % (
-                codelist['external_id'], codelist['id'], codelist['attr:Applicable Periods'])
+            if codelist['external_id'] in matched_codelists:
+                print '    ', codelist
+    if verbosity >= 2:
         print ''
-    print '  Unique Indicator Codes:', len(sorted_indicators)
-    if verbosity >= 3:
+    print '  Code Lists with No Data Elements:', len(codelists) - len(matched_codelists)
+    if verbosity >= 2:
+        for codelist in codelists:
+            if codelist['external_id'] not in matched_codelists:
+                print '    ', codelist
+
+    # Summary for indicator-->data element maps
+    num_indicators_with_de_maps = 0
+    num_indicator_to_de_maps = 0
+    for indicator_code in map_indicator_to_de:
+        if indicator_code in map_indicator_to_de and map_indicator_to_de[indicator_code]:
+            num_indicators_with_de_maps += 1
+            num_indicator_to_de_maps += len(map_indicator_to_de[indicator_code])
+    if verbosity >= 2:
+        print ''
+    print '  Indicators with DE Maps: %s indicator codes, %s maps' % (
+        num_indicators_with_de_maps, num_indicator_to_de_maps)
+    if verbosity >= 2:
+        for indicator_code in map_indicator_to_de:
+            if map_indicator_to_de[indicator_code]:
+                print '    %s (%s):' % (indicator_code, len(
+                    map_indicator_to_de[indicator_code])), map_indicator_to_de[indicator_code]
+    if verbosity >= 2:
+        print ''
+    print '  Indicators with no DE Maps: %s indicator codes' % str(
+        len(sorted_indicators) - num_indicators_with_de_maps)
+    if verbosity >= 2:
         for indicator_code in sorted_indicators:
-            print '    ', indicator_code
+            if indicator_code not in map_indicator_to_de:
+                print '    %s' % indicator_code
 
 
 def get_new_org_json(org_id=''):
@@ -143,6 +218,46 @@ def load_pdh(filename=''):
     return pdh
 
 
+def get_pdh_de_numerator_or_denominator(de_name):
+    """
+    Returns 'Numerator' or 'Denominator', respectively, if 'N' or 'D' is
+    present in the data element modifiers (ie, in between parentheses).
+    """
+    if '(N,' in de_name or '(N)' in de_name:
+        return 'Numerator'
+    elif '(D,' in de_name or '(D)' in de_name:
+        return 'Denominator'
+    return ''
+
+
+def get_pdh_de_support_type(de_name):
+    """
+    Returns fully specified PEPFAR support type (eg 'Technical Assistance' or 'Direct Service
+    Delivery') based on the presence of one of the acronyms in a PDH derived data element name.
+    """
+    de_modifiers = get_data_element_name_modifiers(de_name)
+    if ', TA' in de_modifiers:
+        return 'Technical Assistance'
+    elif ', DSD' in de_modifiers:
+        return 'Direct Service Delivery'
+    return ''
+
+
+def get_pdh_de_version(de_name):
+    """
+    Returns data element version number if ' v#:' is present in the data element name.
+    """
+    if ' v2:' in de_name:
+        return 'v2'
+    elif ' v3:' in de_name:
+        return 'v3'
+    elif ' v4:' in de_name:
+        return 'v4'
+    elif ' v5:' in de_name:
+        return 'v5'
+    return ''
+
+
 def get_data_element_numerator_or_denominator(de_code=''):
     """
     Returns 'Numerator' or 'Denominator', respectively, if '_N_' or '_D_' is
@@ -157,8 +272,8 @@ def get_data_element_numerator_or_denominator(de_code=''):
 
 def get_data_element_support_type(de_code=''):
     """
-    Returns fully specified PEPFAR support type based on the presence of one of
-    the acronyms in a data element code.
+    Returns fully specified PEPFAR support type (eg 'Technical Assistance' or 'Direct Service
+    Delivery') based on the presence of one of the acronyms in a DATIM data element code.
     """
     if '_TA_' in de_code:
         return 'Technical Assistance'
@@ -521,10 +636,6 @@ def build_concept_from_datim_de(de_raw, org_id, source_id, sorted_indicators, co
         'retired': False,
         'external_id': de_raw['id'],
         'descriptions': None,
-        'extras': {
-            'resultTarget': de_result_or_target,
-            'indicator': de_indicator_code,
-        },
         'names': [
             {
                 'name': de_raw['name'],
@@ -540,7 +651,12 @@ def build_concept_from_datim_de(de_raw, org_id, source_id, sorted_indicators, co
                 'locale_preferred': False,
                 'external_id': None,
             }
-        ]
+        ],
+        'extras': {
+            'source': 'DATIM',
+            'resultTarget': de_result_or_target,
+            'indicator': de_indicator_code,
+        },
     }
     if 'description' in de_raw and de_raw['description']:
         de_concept['descriptions'] = [
@@ -576,7 +692,7 @@ def build_concept_from_datim_de(de_raw, org_id, source_id, sorted_indicators, co
     if 'aggregationType' in de_raw and de_raw['aggregationType']:
         de_concept['extras']['aggregationType'] = de_raw['aggregationType']
     if de_version:
-        de_concept['extras']['DATIM Data Element Version'] = de_version
+        de_concept['extras']['data_element_version'] = de_version
     if de_numerator_or_denominator:
         de_concept['extras']['numeratorDenominator'] = de_numerator_or_denominator
     if de_support_type:
@@ -585,3 +701,156 @@ def build_concept_from_datim_de(de_raw, org_id, source_id, sorted_indicators, co
         de_concept['extras']['unformatted_id'] = de_concept_id_dirty
 
     return de_concept
+
+
+def get_pdh_rule_begin_end_string(pdh_row):
+    """
+    Return a string representing the period of validity for a PDH derived data element
+    """
+    return '%s - %s' % (pdh_row['rule_begin_period'], pdh_row['rule_end_period'])
+
+
+def get_data_element_name_modifiers(de_name):
+    """
+    Extract the modifier portion of a PDH derived data element name.
+    For example, 'D, DSD' would be returned this name:
+    'CXCA_SCRN (D, DSD) TARGET: Receiving ART'
+    """
+    result = re.search(r'^[a-zA-Z_]+? \((.*?)\)', de_name)
+    if result:
+        return result.group(1)
+    return ''
+
+
+def build_concept_from_pdh_de(pdh_row, org_id, source_id):
+    """ Return an OCL-formatted concept for the specified PDH derived data element """
+    de_concept = {
+        'type': 'Concept',
+        'id': pdh_row['derived_data_element_uid'],
+        'concept_class': 'Derived Data Element',
+        'datatype': 'Numeric',
+        'owner': org_id,
+        'owner_type': 'Organization',
+        'source': source_id,
+        'retired': False,
+        'external_id': pdh_row['derived_data_element_uid'],
+        'descriptions': None,
+        'extras': {
+            'source': 'PDH',
+            'resultTarget': pdh_row['result_target'].lower().capitalize(),
+            'indicator': pdh_row['indicator'],
+            'disaggregate': pdh_row['disaggregate'],
+            'standardized_disaggregate': pdh_row['standardized_disaggregate'],
+            'Applicable Periods': get_pdh_rule_begin_end_string(pdh_row),
+            'pdh_derivation_rule_id': pdh_row['rule_id'],
+        },
+        'names': [
+            {
+                'name': pdh_row['derived_data_element_name'],
+                'name_type': 'Fully Specified',
+                'locale': 'en',
+                'locale_preferred': True,
+                'external_id': None,
+            }
+        ]
+    }
+
+    # Set DE custom attributes
+    de_version = get_pdh_de_version(pdh_row['derived_data_element_name'])
+    de_numerator_or_denominator = get_pdh_de_numerator_or_denominator(pdh_row['derived_data_element_name'])
+    de_support_type = get_pdh_de_support_type(pdh_row['derived_data_element_name'])
+    if de_version:
+        de_concept['extras']['data_element_version'] = de_version
+    if de_numerator_or_denominator:
+        de_concept['extras']['numeratorDenominator'] = de_numerator_or_denominator
+    if de_support_type:
+        de_concept['extras']['pepfarSupportType'] = de_support_type
+
+    return de_concept
+
+
+def get_datim_codelist_stats(codelist_datim):
+    """ Returns counts of rows, data elements and category option combos in the DATIM codelist """
+    unique_data_element_ids = {}
+    unique_coc_ids = {}
+    for row in codelist_datim['listGrid']['rows']:
+        unique_data_element_ids[row[DATIM_CODELIST_COLUMN_DATA_ELEMENT_UID]] = True
+        unique_coc_ids[row[DATIM_CODELIST_COLUMN_COC_UID]] = True
+    return {
+        'Total Rows': len(codelist_datim['listGrid']['rows']),
+        'Unique Data Element IDs': len(unique_data_element_ids),
+        'Unique COC IDs:': len(unique_coc_ids),
+    }
+
+
+def diff_codelist(codelist_ocl=None, codelist_datim=None):
+    diff = {
+        'missing_in_ocl_de': [],
+        'missing_in_ocl_coc': [],
+        'missing_in_ocl_mapping': [],
+        'too_many_in_ocl_de': [],
+        'too_many_in_ocl_coc': [],
+        'too_many_in_ocl_mapping': [],
+        'missing_in_datim_codelist': []
+    }
+
+    # Iterate thru the DATIM list
+    for row in codelist_datim['listGrid']['rows']:
+        # Find the Data Element
+        de_concepts = codelist_ocl.get_concepts(core_attrs={
+                'id': row[DATIM_CODELIST_COLUMN_DATA_ELEMENT_CODE],
+                'external_id': row[DATIM_CODELIST_COLUMN_DATA_ELEMENT_UID],
+                'concept_class': 'Data Element'
+            })
+        if len(de_concepts) == 0:
+            diff['missing_in_ocl_de'].append(row)
+        elif len(de_concepts) > 1:
+            diff['too_many_in_ocl_de'].append(row)
+
+        # Find the COC
+        coc_concepts = codelist_ocl.get_concepts(core_attrs={
+                'id': row[DATIM_CODELIST_COLUMN_COC_CODE],
+                'external_id': row[DATIM_CODELIST_COLUMN_COC_UID],
+                'concept_class': 'Category Option Combo'
+            })
+        if len(coc_concepts) == 90:
+            diff['missing_in_ocl_coc'].append(row)
+        elif len(coc_concepts) > 1:
+            diff['too_many_in_ocl_coc'].append(row)
+
+        # Find the mapping
+        if de_concepts and coc_concepts:
+            de_to_coc_mappings = codelist_ocl.get_mappings(
+                from_concept_uri=de_concepts[0]['url'],
+                to_concept_uri=coc_concepts[0]['url'],
+                map_type=MSP_MAP_TYPE_DE_TO_COC)
+            # print '  from_concept:', de_concepts[0]['url']
+            # print '  to_concept:', coc_concepts[0]['url']
+            # print '  result:', de_to_coc_mappings
+            if len(de_to_coc_mappings) == 0:
+                diff['missing_in_ocl_mapping'].append(row)
+            elif len(de_to_coc_mappings) > 1:
+                diff['too_many_in_ocl_mapping'].append(row)
+        else:
+            diff['missing_in_ocl_mapping'].append(row)
+
+    # Now iterate through the OCL collection
+    for de_concept in codelist_ocl.get_concepts(core_attrs={'concept_class': 'Data Element'}):
+        for mapping in codelist_ocl.get_mappings(from_concept_uri=de_concept['url'], map_type=MSP_MAP_TYPE_DE_TO_COC):
+            coc_concept = codelist_ocl.get_concept_by_uri(mapping['to_concept_url'])
+            found_matching_row = False
+            if coc_concept:
+                for row in codelist_datim['listGrid']['rows']:
+                    if (row[DATIM_CODELIST_COLUMN_DATA_ELEMENT_CODE] == de_concept['id'] and
+                            row[DATIM_CODELIST_COLUMN_DATA_ELEMENT_UID] == de_concept['external_id'] and
+                            row[DATIM_CODELIST_COLUMN_COC_CODE] == coc_concept['id'] and
+                            row[DATIM_CODELIST_COLUMN_COC_UID] == coc_concept['external_id']):
+                        found_matching_row = True
+                        break
+            if not found_matching_row:
+                diff['missing_in_datim_codelist'].append(mapping)
+                # diff['missing_in_datim_codelist'].append({
+                #     'from_concept': de_concept, 'to_concept': coc_concept, 'mapping': mapping})
+
+    # Remove empty diff keys and return
+    return {k: v for k, v in diff.items() if v}
