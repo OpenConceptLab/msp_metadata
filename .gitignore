@@ -131,3 +131,5 @@ settings.local.py
 # Pyre type checker
 .pyre/
 .DS_Store
+.idea/dictionaries/paynejd.xml
+.idea/workspace.xml
