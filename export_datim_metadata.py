@@ -11,15 +11,21 @@ import settings
 DATIM_EXPORTS = {
     'dataElements': {
         'fileType': 'json',
-        'url': 'https://dev-de.datim.org/api/dataElements.json?fields=id,code,name,shortName,aggregationType,domainType,description,valueType,categoryCombo[id,code,name,categoryOptionCombos[id,code,name]],dataElementGroups[id,name],attributeValues,dataSetElements[dataSet[id,name,shortName]]&paging=false',
+        'url': ('https://dev-de.datim.org/api/dataElements.json?fields=id,code,name,shortName,'
+                'aggregationType,domainType,description,valueType,categoryCombo[id,code,name,'
+                'categoryOptionCombos[id,code,name]],dataElementGroups[id,name],attributeValues,'
+                'dataSetElements[dataSet[id,name,shortName,code]]&paging=false'),
     },
     'categoryOptionCombos': {
         'fileType': 'json',
-        'url': 'https://dev-de.datim.org/api/categoryOptionCombos.json?fields=id,code,name,shortName,categoryCombo[id,name,dataDimensionType],categoryOptions[id,code,name]&paging=false',
+        'url': ('https://dev-de.datim.org/api/categoryOptionCombos.json?fields=id,code,name,'
+                'shortName,categoryCombo[id,name,dataDimensionType],categoryOptions[id,code,name]'
+                '&paging=false'),
     },
     'dataSets': {
         'fileType': 'csv',
-        'url': 'https://dev-de.datim.org/api/dataSets.csv?fields=id,href,shortName,name,code,description,periodType&paging=false',
+        'url': ('https://dev-de.datim.org/api/dataSets.csv?fields=id,href,shortName,name,code,'
+                'description,periodType&paging=false'),
     }
 }
 
