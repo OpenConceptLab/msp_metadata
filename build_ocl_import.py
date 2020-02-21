@@ -1,14 +1,20 @@
 """
 Prepares DATIM metadata for import into OCL
 
-Questions:
-1. How to handle periods for targets (COP19) vs. results (FY19)
+TO DO NOW:
+* There's an unexpected overlap of 127 data elements between PDH and DATIM DEs, which means
+  that some DATIM DEs are referenced in a run_sequence but not marked as sourced from DATIM
 
-TO DO:
-* Retire concepts (Data Elements, Indicators, and COCs) from previous FY that are no longer used
+TO DO NEXT IMPORT:
+* Build MOH alignment-style relationships between PDH source & derived DE+COC pairs
+* Assign non-standard DDE indicator codes to standard reference indicators
 * Build "Replaced by" mappings to connect a new DE version to an older version
+* Add FYs to code list names (maybe)
+* Improve handling of periods for targets (COP19) vs. results (FY19)
+* Retire concepts (Data Elements, Indicators, and COCs) from previous FY that are no longer used
 
 Resolved:
+* Add versioned reference indicators w/ DE/DDE maps to the DATIM/PDH/MER collections
 * Add "pepfarSupportType" attribute to DATIM DEs
 * Add "numeratorDenominator" attribute to DATIM DEs
 * Create collection versions by year for each code list
@@ -19,24 +25,21 @@ Example of getting indicator formulas (numerators and denominators)
 https://dev-de.datim.org/api/indicators?filter=name:like:VMMC&fields=id,code,name,numerator,denominator
 """
 import json
-import ocldev.oclcsvtojsonconverter
 import msp
 
 
-"""
-Set verbosity level during processing:
- 1 - Summary information only
- 2 - Display detailed results
- 3 - Display detailed results and inputs
- 4 - Display summary of each resource processed
- 5 - Display raw and transformed JSON for each resource processed
- 6 - Not for the faint of heart -- ALL info, including for skipped resources
-"""
+# VERBOSITY: Set verbosity level during processing:
+# 1 - Summary information only
+# 2 - Display detailed results
+# 3 - Display detailed results and inputs
+# 4 - Display summary of each resource processed
+# 5 - Display raw and transformed JSON for each resource processed
+# 6 - Not for the faint of heart -- ALL info, including for skipped resources
 verbosity = 0
 
 # Set org/source ID, input periods, and map types
-org_id = 'PEPFAR-Test4'
-source_id = 'MER-Test4'
+org_id = 'PEPFAR-Test5'
+source_id = 'MER-Test5'
 periods = ['FY16', 'FY17', 'FY18', 'FY19', 'FY20']  # List of all input periods
 pdh_num_run_sequences = 3  # Number of run sequences for processing PDH derived DEs
 
@@ -45,12 +48,11 @@ output_periods = ['FY17', 'FY18', 'FY19', 'FY20']
 output_ocl_formatted_json = True  # Creates the OCL import JSON
 include_new_org_json = True  # Creates new org
 include_new_source_json = True  # Creates new source
-include_new_source_versions = True  # One source version per period
-include_new_codelist_versions = True  # One collection version per collection per period
 output_codelist_json = False  # Outputs JSON for code lists to be used by MSP
 
 # Metadata source files
-filename_datim_data_elements = 'data/datim_dataElements_20200107.json'
+filename_datim_data_elements = 'data/datim_dataElements_20200213.json'
+filename_datim_cocs = 'data/datim_categoryOptionCombos_20200213.json'
 filename_datim_codelists = 'data/codelists_RT_FY16_20_20200107.csv'
 filenames_mer_indicators = [
     'data/mer_indicators_FY17_20200122.csv',
@@ -60,259 +62,220 @@ filenames_mer_indicators = [
 filename_pdh = 'data/pdh_20200105.csv'
 
 
-"""
-LOAD METADATA SOURCES
-
-Outputs:
-1. indicators -- MER Guidance Reference Indicators (FY18-20)
-2. datim_de -- DATIM Data Elements with their disags as sub-resources (<=FY20)
-3. codelists -- Code lists (FY16-20)
-4. pdh_raw -- PDH (<=FY19)
-
-Pre-process indicators and codelists, resulting in:
-5. sorted_indicators -- Sorted and De-duped list of indicator codes
-6. codelists_dict -- Dictionary of codelists with UID as the key
-"""
+# LOAD METADATA SOURCES
+# Outputs:
+# 1. indicators -- FY17-20 Reference Indicators, one OCL-formatted JSON concept per indicator
+# 2. datim_de_all -- All DATIM DEs as exported from DHSI2, list of DHIS2-JSON resources
+# 3. datim_cocs -- ALL DATIM COCs as exported from DHIS2, list of DHIS2-JSON resources
+# 4. codelists -- FY16-20 Code lists, list of one OCL-formatted collection per codelists
+# 5. pdh_raw -- All PDH records, list of one CSV row per record
+# 6. sorted_indicator_codes -- Sorted and de-duped list of indicator codes (eg TX_CURR,TX_NEW)
 indicators = msp.load_indicators(
     filenames=filenames_mer_indicators, org_id=org_id, source_id=source_id)
-sorted_indicators = msp.get_sorted_unique_indicator_codes(indicators=indicators)
-datim_de = msp.load_datim_data_elements(filename=filename_datim_data_elements)
+datim_de_all = msp.load_datim_data_elements(filename=filename_datim_data_elements)
+datim_cocs = msp.load_datim_cocs(filename=filename_datim_cocs)
 codelists = msp.load_codelists(filename=filename_datim_codelists, org_id=org_id)
-codelists_dict = msp.build_codelists_dict(codelists=codelists)
 pdh_raw = msp.load_pdh(filename=filename_pdh)
+sorted_indicator_codes = msp.get_sorted_unique_indicator_codes(indicators=indicators)
 
 # Summarize metadata loaded
 if verbosity:
     msp.display_input_metadata_summary(
-        verbosity=verbosity, indicators=indicators, datim_de=datim_de,
-        codelists=codelists, sorted_indicators=sorted_indicators, pdh_raw=pdh_raw)
+        verbosity=verbosity, indicators=indicators, datim_de_all=datim_de_all,
+        datim_cocs=datim_cocs, codelists=codelists, pdh_raw=pdh_raw,
+        sorted_indicator_codes=sorted_indicator_codes)
 
-"""
-PROCESS DATIM METADATA -- Process DATIM metadata sources to produce the following outputs:
-1. de_concepts -- Dictionary with DE URL as key and transformed data element dictionary as value
-2. coc_concepts -- Dictionary wiht COC URL as key and transformed COC dictionary as value
-3. map_indicator_to_de -- Dictionary with indicator_code as key and list of data element IDs as value
-4. map_de_to_coc -- Dictionary with DE URL as key and list of COC URLs as value
-5. de_skipped_no_code -- List of raw DEs that have no 'code' attribute
-6. de_skipped_no_indicator -- List of raw DEs that did not map to an indicator code
-7. matched_codelists -- List of code lists that matched at least one processed DEs
-8. matched_periods -- List of periods (eg FY18) that had at least one matched DE
-9. dirty_data_element_ids -- List of data element IDs with a code that needed to be reformatted
-"""
-de_concepts = {}
-coc_concepts = {}
-map_indicator_to_de = {}
-map_de_to_coc = {}
-de_skipped_no_code = []
-de_skipped_no_indicator = []
-matched_codelists = []
-matched_periods = []
-dirty_data_element_ids = []
-if verbosity >= 4:
-    print '\nPROCESSING:'
-for de_raw in datim_de['dataElements']:
-    de_concept = msp.build_concept_from_datim_de(
-        de_raw, org_id, source_id, sorted_indicators, codelists_dict)
 
-    # Handle exceptions in data element creation
-    if not isinstance(de_concept, dict):
-        if de_concept == -1:
-            de_skipped_no_code.append(de_raw)
-            err_msg = 'SKIPPED: No Data Element Code'
-        elif de_concept == -2:
-            de_skipped_no_indicator.append(de_raw)
-            err_msg = 'SKIPPED: Data element prefix does not match an indicator code'
-        if verbosity >= 6:
-            print '   %s\n    ' % err_msg, de_raw
-        continue
-    if verbosity >= 5:
-        print '     Raw-DE: ', de_raw
+# GENERATE OCL-FORMATTED METADATA
+# Process DATIM metadata sources to produce the following outputs:
+# 1. coc_concepts -- Dictionary with COC URL as key and OCL-formatted COC dictionary as value
+# 2. de_concepts -- Dictionary with DE URL as key and OCL-formatted DE dictionary as value
+# 3. map_indicator_to_de -- Dictionary with indicator_code as key and list of DE URLs as value
+# 4. map_de_to_coc -- Dictionary with DE URL as key and list of COC URLs as value
+# 5. map_codelist_to_de -- Dictionary with Codelist ID as key and list of DE URLs as value
+# 6. pdh_dde_concepts -- Dictionary with unique DDE URL as key and DDE concept as value
+# 7. map_pdh_dde_to_coc -- Dictionary with DDE URL as key and list of COC URLs as value
+# 8. map_indicator_to_pdh_dde -- Dict with indicator_code as key & list of DDE URLs as value
+coc_concepts = msp.build_all_datim_coc_concepts(datim_cocs, org_id, source_id)
+de_concepts = msp.build_all_datim_de_concepts(
+    datim_de_all, org_id, source_id, sorted_indicator_codes, codelists)
+map_indicator_to_de = msp.build_indicator_to_de_maps(de_concepts, sorted_indicator_codes)
+map_de_to_coc = msp.build_de_to_coc_maps(de_concepts, coc_concepts, org_id, source_id)
+map_codelist_to_de = msp.build_codelist_to_de_map(de_concepts)
+pdh_dde_concepts = msp.build_all_pdh_dde_concepts(
+    pdh_raw, pdh_num_run_sequences, org_id, source_id, sorted_indicator_codes)
+map_pdh_dde_to_coc = msp.build_pdh_dde_to_coc_maps(
+    pdh_dde_concepts, coc_concepts=coc_concepts)
+map_indicator_to_pdh_dde = msp.build_indicator_to_de_maps(
+    pdh_dde_concepts, sorted_indicator_codes)
 
-    # Add dirty ID to the dirty ID tracking list
-    de_concept_url = '/orgs/%s/sources/%s/concepts/%s/' % (org_id, source_id, de_concept['id'])
-    de_concept_id = de_concept['id']
-    de_concept_id_dirty = de_concept['extras'].get('unformatted_id', de_concept_id)
-    if de_concept_id != de_concept_id_dirty:
-        dirty_data_element_ids.append('Raw: %s != Clean: %s' % (de_concept_id_dirty, de_concept_id))
-
-    # Add data element to the indicator-->data element map list
-    if 'indicator' in de_concept['extras']:
-        de_indicator_code = de_concept['extras']['indicator']
-        if de_indicator_code not in map_indicator_to_de:
-            map_indicator_to_de[de_indicator_code] = []
-        map_indicator_to_de[de_indicator_code].append(de_concept_id)
-
-    # Process DE's dataSets and Code Lists
-    if 'Applicable Periods' in de_concept['extras']:
-        matched_periods = list(set().union(
-            matched_periods, de_concept['extras']['Applicable Periods']))
-    if 'codelists' in de_concept['extras']:
-        de_codelist_ids = []
-        for de_matched_codelist in de_concept['extras']['codelists']:
-            de_codelist_ids.append(de_matched_codelist['id'])
-        matched_codelists = list(set().union(matched_codelists, de_codelist_ids))
-
-    # Save the data element
-    de_concepts[de_concept_url] = de_concept
-    if verbosity >= 5:
-        print '     OCL-DE: ', de_concept
-
-    # Process disaggregates
-    if verbosity >= 5:
-        print '     COCs:'
-    for coc_raw in de_raw['categoryCombo']['categoryOptionCombos']:
-        # Generate the COC
-        coc_concept_key = '/orgs/%s/sources/%s/concepts/%s/' % (org_id, source_id, coc_raw['id'])
-        coc_concept = msp.build_concept_from_datim_coc(coc_raw, org_id, source_id)
-
-        # Add COC to map arrays
-        coc_concepts[coc_concept_key] = coc_concept
-        if de_concept_url not in map_de_to_coc:
-            map_de_to_coc[de_concept_url] = []
-        map_de_to_coc[de_concept_url].append(coc_concept_key)
-        if verbosity >= 5:
-            print '       Raw-COC: ', coc_raw
-            print '       OCL-COC: ', coc_concept
-    if verbosity >= 5:
-        print '     All COC keys for this DE:', map_de_to_coc[de_concept_url]
-
-# Summarize results of processing all DATIM data elements
+# Summarize results of processing all data elements
 if verbosity:
     msp.display_processing_summary(
-        verbosity=verbosity, de_concepts=de_concepts,
-        de_skipped_no_code=de_skipped_no_code,
-        de_skipped_no_indicator=de_skipped_no_indicator,
-        dirty_data_element_ids=dirty_data_element_ids,
+        verbosity=verbosity,
         codelists=codelists,
-        matched_periods=matched_periods,
-        matched_codelists=matched_codelists,
+        sorted_indicator_codes=sorted_indicator_codes,
+        coc_concepts=coc_concepts,
+        de_concepts=de_concepts,
         map_indicator_to_de=map_indicator_to_de,
-        sorted_indicators=sorted_indicators)
+        map_de_to_coc=map_de_to_coc,
+        map_codelist_to_de=map_codelist_to_de,
+        map_pdh_dde_to_coc=map_pdh_dde_to_coc,
+        map_indicator_to_pdh_dde=map_indicator_to_pdh_dde)
 
-"""
-PROCESS PDH METADATA -- Process PDH metadata source to produce the following outputs:
-1. pdh_de_concepts -- List of unique OCL-formatted PDH derived data elements
-2. pdh_de_concept_ids -- List of unique PDH derived data element IDs
-"""
-pdh_de_concepts = []
-pdh_de_concept_ids = []
 
-# Iterate thru PDH rows once per run sequence
-for i in range(pdh_num_run_sequences):
-    current_run_sequence_str = str(i + 1)
-    for pdh_row in pdh_raw:
-        # Skip data elements directly from DATIM or in a different run sequence
-        if pdh_row['source_srgt_key'] == '1' or pdh_row['Derived_level_run_seq'] != current_run_sequence_str:
-            continue
+# GENERATE REFERENCES
+# Organize MSP metadata into collections:
+# 1. codelist_references -- List of OCL-formatted reference batches to
+#       all DEs, COCs, and mappings between them
+# 2. datim_references -- Dictionary with period as key, list of
+#       OCL-formatted references for all DATIM data elements as value
+# 3. pdh_references -- Dictionary with period as key, list of
+#       OCL-formatted references for all PDH data elements as value
+# 4. mer_references -- Dictionary with period as key, list of
+#       OCL-formatted references for all DATIM+PDH data elements as value
+codelist_references = msp.build_codelist_references(
+    map_codelist_to_de=map_codelist_to_de, map_de_to_coc=map_de_to_coc, org_id=org_id)
+datim_references = msp.get_mapped_concept_references_by_period(
+    from_concepts=de_concepts, map_dict=map_de_to_coc,
+    org_id=org_id, collection_id=msp.COLLECTION_NAME_DATIM, periods=output_periods,
+    include_to_concept_refs=True, include_all_period=True)
+datim_indicator_references = msp.get_mapped_concept_references_by_period(
+    from_concepts=indicators, map_dict=map_indicator_to_de,
+    org_id=org_id, collection_id=msp.COLLECTION_NAME_DATIM, periods=output_periods,
+    include_to_concept_refs=False, include_all_period=True,
+    ignore_from_concepts_with_no_maps=True)
+pdh_references = msp.get_mapped_concept_references_by_period(
+    from_concepts=pdh_dde_concepts, map_dict=map_pdh_dde_to_coc,
+    org_id=org_id, collection_id=msp.COLLECTION_NAME_PDH, periods=output_periods,
+    include_to_concept_refs=True, include_all_period=True)
+pdh_indicator_references = msp.get_mapped_concept_references_by_period(
+    from_concepts=indicators, map_dict=map_indicator_to_pdh_dde,
+    org_id=org_id, collection_id=msp.COLLECTION_NAME_PDH, periods=output_periods,
+    include_to_concept_refs=False, include_all_period=True,
+    ignore_from_concepts_with_no_maps=True)
+mer_references = msp.build_mer_references(
+    de_concepts=de_concepts, map_de_to_coc=map_de_to_coc,
+    pdh_dde_concepts=pdh_dde_concepts, map_pdh_dde_to_coc=map_pdh_dde_to_coc,
+    org_id=org_id, collection_id=msp.COLLECTION_NAME_MER, periods=output_periods,
+    include_to_concept_refs=True, include_all_period=False)
+mer_indicator_references = msp.build_mer_indicator_references(
+    indicators=indicators, map_indicator_to_de=map_indicator_to_de,
+    map_indicator_to_pdh_dde=map_indicator_to_pdh_dde,
+    org_id=org_id, collection_id=msp.COLLECTION_NAME_MER, periods=output_periods,
+    include_to_concept_refs=False, include_all_period=False)
 
-        # Build the PDH derived data element concept
-        de_concept_id = pdh_row['derived_data_element_uid']
-        if de_concept_id not in pdh_de_concept_ids:
-            de_concept = msp.build_concept_from_pdh_de(pdh_row, org_id, source_id)
-            pdh_de_concept_ids.append(de_concept_id)
-            pdh_de_concepts.append(de_concept)
-
-        # Check if COCs exists
-        pdh_derived_coc_concept_key = '/orgs/%s/sources/%s/concepts/%s/' % (
-            org_id, source_id, pdh_row['derived_category_option_combo'])
-        pdh_source_coc_concept_key = '/orgs/%s/sources/%s/concepts/%s/' % (
-            org_id, source_id, pdh_row['source_category_option_combo_uid'])
-        if pdh_derived_coc_concept_key not in coc_concepts:
-            print 'Missing derived COC:', pdh_derived_coc_concept_key
-        if pdh_source_coc_concept_key not in coc_concepts:
-            print 'Missing source COC:', pdh_source_coc_concept_key
-
-# Prepare for import by period
-filtered_indicators = {}
-filtered_de = {}
-filtered_disags = {}
-filtered_codelists = {}
-filtered_maps_indicator_to_de = {}
-filtered_maps_de_to_coc = {}
-filtered_codelist_references = {}
-for period in periods:
-    if verbosity:
-        print '\n******** SUMMARY RESULTS BY PERIOD: %s ********' % period
-
-    # Filter codelists by period and convert from CSV format to OCL-formatted JSON
-    filtered_csv_codelists = msp.get_filtered_codelists(codelists=codelists, period=period)
-    csv_converter = ocldev.oclcsvtojsonconverter.OclStandardCsvToJsonConverter(
-        input_list=filtered_csv_codelists)
-    filtered_codelists[period] = csv_converter.process()
-
-    # Filter indicators by period and convert from CSV format to OCL-formatted JSON
-    filtered_csv_indicators = msp.get_filtered_indicators(indicators=indicators, period=period)
-    csv_converter = ocldev.oclcsvtojsonconverter.OclStandardCsvToJsonConverter(
-        input_list=filtered_csv_indicators)
-    filtered_indicators[period] = csv_converter.process()
-
-    # Filter all of the other resources by period, which are already in OCL-formatted JSON
-    filtered_de[period] = msp.get_filtered_data_elements(data_elements=de_concepts, period=period)
-    filtered_disags[period] = msp.get_filtered_disags(
-        data_elements=filtered_de[period], map_de_to_coc=map_de_to_coc, coc_concepts=coc_concepts)
-    filtered_maps_indicator_to_de[period] = msp.get_indicator_to_de_maps(
-        filtered_de=filtered_de[period], org_id=org_id, source_id=source_id,
-        map_type_indicator_to_de=msp.MSP_MAP_TYPE_INDICATOR_TO_DE)
-    filtered_maps_de_to_coc[period] = msp.get_de_to_disag_maps(
-        filtered_de=filtered_de[period], map_de_to_coc=map_de_to_coc,
-        org_id=org_id, source_id=source_id, map_type_de_to_coc=msp.MSP_MAP_TYPE_DE_TO_COC)
-    filtered_codelist_references[period] = msp.get_codelist_references(
-        filtered_csv_codelists=filtered_csv_codelists, map_de_to_coc=map_de_to_coc,
-        org_id=org_id, source_id=source_id)
-
-    # Summarize results for this period
-    if verbosity:
-        print '  Indicators: %s' % len(filtered_indicators[period])
-        print '  Data Elements: %s' % len(filtered_de[period])
-        print '  Disags: %s' % len(filtered_disags[period])
-        print '  Code Lists: %s' % len(filtered_codelists[period])
-        print '  Indicator --> DE Maps: %s' % len(filtered_maps_indicator_to_de[period])
-        print '  DE --> Disag Maps: %s' % len(filtered_maps_de_to_coc[period])
-        count_codelist_references = 0
-        for codelist_id in filtered_codelist_references[period].keys():
-            count_codelist_references += len(
-                filtered_codelist_references[period][codelist_id]['data']['expressions'])
-        print '  Code List References: %s references in %s code lists' % (
-            count_codelist_references, len(filtered_codelist_references[period]))
-
+# Display summary of the references generated
 if verbosity:
-    print ''
+    msp.display_references_summary(
+        codelist_references=codelist_references,
+        datim_references=datim_references,
+        datim_indicator_references=datim_indicator_references,
+        pdh_references=pdh_references,
+        pdh_indicator_references=pdh_indicator_references,
+        mer_references=mer_references,
+        mer_indicator_references=mer_indicator_references)
 
-# Output OCL-formatted JSON by period
+
+# OUTPUT OCL-FORMATTED JSON
+# Prints OCL-formatted JSON by period to the standard output. De-duplicates the entire import
+# list by line prior to outputting. Content by period is outputted in this sequence:
+#  - Primary Org and Source
+#     - Category Option Combos
+#     - DATIM Data Elements (DEs)
+#     - PDH Derived Data Elements (DDEs)
+#     - Maps: DEs/DDEs to COCs
+#     - Reference Indicators (grouped by period)
+#     - Maps: Reference Indicators to DEs/DDEs
+#     - Source Version
+#  - Codelists
+#     - DE/COC References
+#     - Codelist Collection Versions
+#  - Source collections (MER, DATIM, PDH)
+#     - Collections
+#     - Reference Indicators
+#     - Maps: Indicators to Data Elements
+#     - DE/DDE/COC References
+#     - Collection Versions
 if output_ocl_formatted_json:
     import_list = []
     if include_new_org_json:
         import_list.append(msp.get_new_org_json(org_id=org_id))
     if include_new_source_json:
-        import_list.append(msp.get_new_source_json(org_id=org_id, source_id=source_id))
-    for period in output_periods:
-        for resource in filtered_codelists[period]:
-            import_list.append(resource)
-        for resource in filtered_indicators[period]:
-            import_list.append(resource)
-        for resource in filtered_de[period]:
-            import_list.append(resource)
-        for resource_key in filtered_disags[period].keys():
-            import_list.append(filtered_disags[period][resource_key])
-        for resource in filtered_maps_indicator_to_de[period]:
-            import_list.append(resource)
-        for resource in filtered_maps_de_to_coc[period]:
-            import_list.append(resource)
-        for codelist_id in filtered_codelist_references[period].keys():
-            import_list.append(filtered_codelist_references[period][codelist_id])
+        import_list.append(msp.get_primary_source(org_id=org_id, source_id=source_id))
 
-        # Generate MER source version
-        if include_new_source_versions:
+    # Output OCL-formatted concepts for COCs, DEs, DDEs for the primary source
+    for concept_url in coc_concepts:
+        import_list.append(coc_concepts[concept_url])
+    for concept_url in pdh_dde_concepts:
+        import_list.append(pdh_dde_concepts[concept_url])
+    for concept_url in de_concepts:
+        import_list.append(de_concepts[concept_url])
+
+    # Output OCL-formatted mappings for DATIM DEs-->COCs
+    import_list += msp.build_ocl_mappings(
+        map_dict=map_de_to_coc, owner_id=org_id, source_id=source_id,
+        map_type=msp.MSP_MAP_TYPE_DE_TO_COC)
+
+    # Output OCL-formatted mappings for PDH DDEs-->COCs
+    import_list += msp.build_ocl_mappings(
+        map_dict=map_pdh_dde_to_coc, owner_id=org_id, source_id=source_id,
+        map_type=msp.MSP_MAP_TYPE_DE_TO_COC)
+
+    # Output OCL-formatted concepts for Reference Indicators
+    import_list += msp.get_concepts_filtered_by_period(
+        concepts=indicators, period=output_periods)
+
+    # Output OCL-formatted mappings for Indicators-->DATIM DEs
+    import_list += msp.build_ocl_mappings(
+        map_dict=map_indicator_to_de, owner_id=org_id, source_id=source_id,
+        map_type=msp.MSP_MAP_TYPE_INDICATOR_TO_DE)
+
+    # Output OCL-formatted mappings for Indicators-->PDH DDEs
+    import_list += msp.build_ocl_mappings(
+        map_dict=map_indicator_to_pdh_dde, owner_id=org_id, source_id=source_id,
+        map_type=msp.MSP_MAP_TYPE_INDICATOR_TO_DE)
+
+    # Generate released version for the primary source
+    import_list.append(msp.get_repo_version_json(
+        owner_id=org_id, repo_id=source_id, version_id='v1.0',
+        description='Auto-generated release'))
+
+    # Output codelists and their references
+    import_list += codelists
+    import_list += codelist_references
+    for codelist in codelists:
+        import_list.append(msp.get_repo_version_json(
+            owner_id=org_id, repo_type='Collection', repo_id=codelist['id'],
+            version_id='v1.0', description='Auto-generated release'))
+
+    # Output Metadata Source collections (MER, DATIM, MSP)
+    for collection_id in msp.COLLECTION_NAMES:
+        if collection_id != msp.COLLECTION_NAME_MER:
+            import_list.append(msp.get_new_repo_json(
+                owner_id=org_id, repo_type='Collection', repo_id=collection_id,
+                name=collection_id, full_name=collection_id))
+        for period in output_periods:
+            period_collection_id = '%s-%s' % (collection_id, period)
+            import_list.append(msp.get_new_repo_json(
+                owner_id=org_id, repo_type='Collection', repo_id=period_collection_id,
+                name=period_collection_id, full_name=period_collection_id))
+    for period_key in datim_references:
+        import_list += datim_references[period_key]
+    for period_key in pdh_references:
+        import_list += pdh_references[period_key]
+    for period_key in mer_references:
+        import_list += mer_references[period_key]
+    for collection_id in msp.COLLECTION_NAMES:
+        if collection_id != msp.COLLECTION_NAME_MER:
             import_list.append(msp.get_repo_version_json(
-                owner_id=org_id, repo_id=source_id, version_id=period,
-                description='Auto-generated %s' % period))
-
-        # Generate collection versions for each codelist updated during the current period
-        if include_new_codelist_versions:
-            for resource in filtered_codelists[period]:
-                import_list.append(msp.get_repo_version_json(
-                    owner_id=org_id, repo_type='Collection', repo_id=resource['id'],
-                    version_id=period, description='Auto-generated %s' % period))
+                owner_id=org_id, repo_type='Collection', repo_id=collection_id,
+                version_id='v1.0', description='Auto-generated release'))
+        for period in output_periods:
+            period_collection_id = '%s-%s' % (collection_id, period)
+            import_list.append(msp.get_repo_version_json(
+                owner_id=org_id, repo_type='Collection', repo_id=period_collection_id,
+                version_id='v1.0', description='Auto-generated release'))
 
     # Dedup the import list without changing order
     import_list_dedup = msp.dedup_list_of_dicts(import_list)
@@ -321,6 +284,8 @@ if output_ocl_formatted_json:
     for resource in import_list_dedup:
         print json.dumps(resource)
 
-# Optionally output all codelists as JSON
+
+# CODELIST JSON
+# Optionally output all codelists as JSON intended for populating filters in MSP
 if output_codelist_json:
     print json.dumps(msp.get_codelists_formatted_for_display(codelists=codelists))
