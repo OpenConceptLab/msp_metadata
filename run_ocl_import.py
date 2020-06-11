@@ -2,11 +2,12 @@
 Imports a JSON lines file into OCL
 """
 import ocldev.oclfleximporter
+import ocldev.oclresourcelist
 import settings
 
 
-# Settings
-json_filename = 'output/msp_full_FY17_20_20200207.json'
+# settings
+json_filename = 'output/datim_indicators.json'
 api_url_root = 'https://api.staging.openconceptlab.org'
 ocl_api_token = settings.ocl_api_token
 do_local_import = False  # Instead of bulk import
@@ -14,12 +15,19 @@ do_local_import = False  # Instead of bulk import
 # Local import settings -- only used if do_local_import == True
 test_mode = False
 limit = 0  # Set to 0 to import all records
+reference_batch_size = 25
+
+# Validate
+print 'Validating import file "%s"...' % json_filename
+import_list = ocldev.oclresourcelist.OclJsonResourceList.load_from_file(json_filename)
+import_list.validate()
 
 # Process the import
 if do_local_import:
     importer = ocldev.oclfleximporter.OclFlexImporter(
         file_path=json_filename, api_url_root=api_url_root, api_token=ocl_api_token,
-        test_mode=test_mode, verbosity=2, do_update_if_exists=True, limit=limit)
+        test_mode=test_mode, verbosity=2, do_update_if_exists=True, limit=limit,
+        reference_batch_size=reference_batch_size)
     importer.process()
 else:  # Do bulk import
     import_request = ocldev.oclfleximporter.OclBulkImporter.post(

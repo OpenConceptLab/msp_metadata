@@ -20,3 +20,5 @@ results = ocldev.oclfleximporter.OclBulkImporter.get_bulk_import_results(
 if results and results_filename:
     with open(results_filename, 'w') as ofile:
         ofile.write(results.to_json())
+        print 'Bulk import results for task "%s" successfully written to %s' % (
+        	task_id, results_filename)
