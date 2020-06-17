@@ -3,22 +3,23 @@ Common functionality used in the MSP ETL scripts used to prepare and import meta
 MER guidance, DATIM, PDH, and related systems.
 """
 import json
-import pprint
 import csv
 import datetime
 import re
 import requests
 import ocldev.oclcsvtojsonconverter
 import ocldev.oclconstants
+import ocldev.oclresourcelist
 
 
 # Constants for OCL mappings
-MSP_MAP_TYPE_INDICATOR_TO_DE = 'Has Data Element'
+MSP_MAP_TYPE_REF_INDICATOR_TO_DE = 'Has Data Element'
+MSP_MAP_TYPE_REF_INDICATOR_TO_DATIM_INDICATOR = 'Has DATIM Indicator'
 MSP_MAP_TYPE_DE_TO_COC = 'Has Option'
 MSP_MAP_TYPE_REPLACES = 'Replaces'
 MSP_MAP_TYPE_DERIVED_FROM = 'Derived From'
 MSP_MAP_TYPES = [
-    MSP_MAP_TYPE_INDICATOR_TO_DE,
+    MSP_MAP_TYPE_REF_INDICATOR_TO_DE,
     MSP_MAP_TYPE_DE_TO_COC,
     MSP_MAP_TYPE_REPLACES,
 ]
@@ -67,6 +68,9 @@ PDH_COLUMNS = [
 PDH_COLUMN_SOURCE_KEY_DATIM = '1'
 PDH_COLUMN_SOURCE_KEY_PDH = '2'
 
+# Constant for processing PDH rule periods
+PDH_RULE_PERIOD_END_YEAR = '2020'
+
 # Constants for DATIM code list columns
 DATIM_CODELIST_COLUMN_DATASET = 0
 DATIM_CODELIST_COLUMN_DATA_ELEMENT_NAME = 1
@@ -89,208 +93,182 @@ DATIM_CODELIST_COLUMNS = [
     DATIM_CODELIST_COLUMN_COC_UID,
 ]
 
-# Constants for MSP collections
-COLLECTION_NAME_DATIM = 'DATIM'
-COLLECTION_NAME_PDH = 'PDH'
-COLLECTION_NAME_MER = 'MER'
-COLLECTION_NAMES = [
-    COLLECTION_NAME_DATIM,
-    COLLECTION_NAME_PDH,
-    COLLECTION_NAME_MER,
-]
+# Constants for MSP collections -- %s is replaced by period (eg FY19)
+COLLECTION_NAME_MER_REFERENCE_INDICATORS = 'MER_REFERENCE_INDICATORS_%s'
 
 # Constants for data element custom attributes
 ATTR_APPLICABLE_PERIODS = 'Applicable Periods'
 ATTR_PERIOD = 'Period'
+ATTR_REPORTING_FREQUENCY = 'Reporting frequency'
+ATTR_RESULT_TARGET = 'resultTarget'
+
+# Mapping between periods and terms that appear in DATIM indicator names (case-insensitive)
+MAP_PERIOD_TO_INDICATOR_TERMS = {
+    "FY21": ["COP20"],
+    "FY20": ["FY20", "2020", "WAD20", "FY17-20", "COP19"],
+    "FY19": ["FY19", "2019", "WAD19", "FY17-20", "COP18"],
+    "FY18": ["FY18", "2018", "WAD18", "FY16-18", "FY17-20", "COP17"],
+    "FY17": ["FY17", "2017", "WAD17", "FY16-18", "FY17-20", "COP16"],
+    "FY16": ["FY16", "2016", "WAD16", "FY16-18", "COP15"],
+}
 
 
-def display_input_metadata_summary(verbosity=1, input_periods=None, datim_indicators=None,
-                                   reference_indicators=None, datim_de_all=None,
-                                   datim_cocs=None, codelists=None, pdh_raw=None):
+def display_resource_list_summaries(resource_list, summary_dict):
+    for (custom_attr_key, summary_dict_title) in summary_dict.items():
+        print '    Breakdown by %s:' % summary_dict_title
+        for (key, count) in resource_list.summarize(custom_attr_key=custom_attr_key).items():
+            print '      %s: %s' % (key, count)
+
+
+def display_input_metadata_summary(verbosity=1, input_periods=None, ref_indicator_concepts=None,
+                                   sorted_ref_indicator_codes=None, coc_concepts=None,
+                                   codelist_collections=None, de_concepts=None,
+                                   datim_indicator_concepts=None, pdh_dde_concepts=None):
     """ Displays summary of the loaded metadata """
     print 'MSP Metadata Statistics %s\n' % datetime.datetime.now().strftime("%Y-%m-%d")
     print 'METADATA SOURCES:'
+
+    # Input periods
     print '  Input Periods:', input_periods
-    if reference_indicators:
-        print '  MER Reference Indicators (FY16-20):', len(reference_indicators)
+
+    # Reference Indicators
+    if ref_indicator_concepts and sorted_ref_indicator_codes:
+        print '  MER Reference Indicators (FY16-20):',
+        print '%s unique indicator codes, %s total definitions' % (
+            len(ref_indicator_concepts), len(sorted_ref_indicator_codes))
+        print '    Breakdown by Indicator Code:'
+        for ref_indicator_code in sorted(sorted_ref_indicator_codes):
+            print '      %s: ' % ref_indicator_code,
+            print ', '.join(ref_indicator_concepts.get_resources(
+                core_attrs={'id': ref_indicator_code}).summarize(custom_attr_key=ATTR_PERIOD).keys())
+        print '    Breakdown by Period:'
+        for (period, count) in ref_indicator_concepts.summarize(custom_attr_key=ATTR_PERIOD).items():
+            print '      %s: %s' % (period, count)
+        print ''
+
+    # COC concepts
+    print '  DATIM COC concepts (All):', len(coc_concepts)
+
+    # Codelist collections
+    if codelist_collections:
+        print '  DATIM Code Lists (FY16-20):', len(codelist_collections)
         if verbosity >= 2:
-            for period in input_periods:
-                print '    [%s]:' % period
-                for ref_indicator in reference_indicators:
-                    if ref_indicator['extras'][ATTR_PERIOD] == period:
-                        if verbosity == 2:
-                            print '      %s' % (ref_indicator['id'])
-                        elif verbosity > 2:
-                            print '      %s: %s' % (ref_indicator['id'], ref_indicator)
-            print ''
-    if datim_indicators:
-        print '  DATIM Indicators (All):', len(datim_indicators)
-    if datim_de_all:
-        print '  DATIM Data Elements (All):', len(datim_de_all['dataElements'])
-    if datim_cocs:
-        print '  DATIM Category Option Combos (All):', len(datim_cocs['categoryOptionCombos'])
-    if pdh_raw:
-        print '  PDH Rows:', len(pdh_raw)
-    if codelists:
-        print '  DATIM Code Lists (FY16-20):', len(codelists)
-        if verbosity >= 2:
-            for codelist in codelists:
+            for codelist in codelist_collections:
                 print '    [%s]  %s (%s)' % (
                     codelist['external_id'],
                     codelist['id'],
                     codelist['extras'][ATTR_APPLICABLE_PERIODS])
             print ''
 
+    # DATIM data element concepts
+    if de_concepts:
+        de_concepts_summary_dict = {
+            ATTR_RESULT_TARGET: 'Result/Target',
+            'domainType': 'Domain Type',
+            'numeratorDenominator': 'Numerator/Denominator',
+            'pepfarSupportType': 'PEPFAR Support Type',
+            ATTR_REPORTING_FREQUENCY: 'Reporting Frequency'
+        }
+        print '  DATIM Data Elements (All):', len(de_concepts)
+        print '    Breakdown by period (via codelists):'
+        for (period, count) in summarize_applicable_periods_from_concepts(de_concepts).items():
+            print '      %s: %s' % (period, count)
+        display_resource_list_summaries(de_concepts, de_concepts_summary_dict)
 
-def display_processing_summary(
-        verbosity=1, codelists=None, datim_indicator_concepts=None, sorted_indicator_codes=None,
-        coc_concepts=None, de_concepts=None, map_indicator_to_de=None, map_de_to_coc=None,
-        map_codelist_to_de=None, map_pdh_dde_to_coc=None, map_indicator_to_pdh_dde=None,
-        org_id='', source_id=''):
+    # PDH derived data element concepts
+    if pdh_dde_concepts:
+        pdh_dde_concepts_summary_dict = {
+            ATTR_RESULT_TARGET: 'Result/Target',
+            'standardized_disaggregate': 'Standardized Disaggregate',
+            'numeratorDenominator': 'Numerator/Denominator',
+            'pepfarSupportType': 'PEPFAR Support Type',
+            ATTR_REPORTING_FREQUENCY: 'Reporting Frequency'
+        }
+        print '  PDH Derived Data Element (All):', len(pdh_dde_concepts)
+        print '    Breakdown by period (via derivation rules):'
+        for (period, count) in summarize_applicable_periods_from_concepts(pdh_dde_concepts).items():
+            print '      %s: %s' % (period, count)
+        display_resource_list_summaries(pdh_dde_concepts, pdh_dde_concepts_summary_dict)
+
+    # DATIM indicator concepts
+    if datim_indicator_concepts:
+        datim_indicator_concepts_summary_dict = {
+            ATTR_RESULT_TARGET: 'Result/Target',
+            'annualized': 'Annualized',
+            'dimensionItemType': 'dimensionItemType',
+        }
+        print '  DATIM Indicators (All):', len(datim_indicator_concepts)
+        print '    Breakdown by period (via keywords in indicator names):'
+        for (period, count) in summarize_applicable_periods_from_concepts(datim_indicator_concepts).items():
+            print '      %s: %s' % (period, count)
+        display_resource_list_summaries(
+            datim_indicator_concepts, datim_indicator_concepts_summary_dict)
+
+    # Display list of overlapping IDs between PDH and DATIM data elements
+    overlapping_de_concepts = {}
+    for dde_concept in pdh_dde_concepts:
+        de_concept = de_concepts.get_resource(core_attrs={'id': dde_concept['id']})
+        if de_concept:
+            overlapping_de_concepts[dde_concept['id']] = {
+                'pdh': dde_concept,
+                'datim': de_concept
+            }
+    if overlapping_de_concepts:
+        print '  Overlapping DATIM/PDH Data Elements: %s' % len(overlapping_de_concepts)
+        for overlapping_de_concept_id in overlapping_de_concepts.keys():
+            print '    [%s]\n      DATIM: %s -- %s\n      PDH: %s -- %s' % (
+                overlapping_de_concept_id,
+                overlapping_de_concepts[overlapping_de_concept_id]['datim']['names'][0]['name'],
+                overlapping_de_concepts[overlapping_de_concept_id]['datim']['extras'][ATTR_APPLICABLE_PERIODS],
+                overlapping_de_concepts[overlapping_de_concept_id]['pdh']['names'][0]['name'],
+                overlapping_de_concepts[overlapping_de_concept_id]['pdh']['extras'][ATTR_APPLICABLE_PERIODS])
+
+
+def display_linkages_summary(
+        verbosity=1, map_ref_indicator_to_de=None, map_ref_indicator_to_pdh_dde=None,
+        map_ref_indicator_to_datim_indicator=None, map_de_to_coc=None, map_pdh_dde_to_coc=None,
+        map_codelist_to_de=None, codelist_collections=None, de_version_linkages=None,
+        map_de_version_linkages=None, map_dde_source_linkages=None):
     """ Display a summary of the result of processing DATIM metadata """
-    print '\nSUMMARY OF RESULTS FROM PROCESSING METADATA:'
+    print '\nSUMMARY OF GENERATED MAPPINGS & LINKAGES:'
 
-    # Unique Indicator Codes
-    if sorted_indicator_codes:
-        print '  Unique Reference Indicator Codes across FY16-20:', len(sorted_indicator_codes)
-        if verbosity >= 2:
-            for indicator_code in sorted_indicator_codes:
-                print '    ', indicator_code
+    # Reference Indicator Mapping summaries
+    print '  Reference Indicator Mappings:'
+    print '    Mappings to DATIM Data Elements (DE): ',
+    print '%s reference indicators with %s unique DE mappings' % (
+        get_dict_child_counts(map_ref_indicator_to_de))
+    print '    Mappings to PDH Derived Data Elements (DDE): ',
+    print '%s reference indicators with %s unique DDE mappings' % (
+        get_dict_child_counts(map_ref_indicator_to_pdh_dde))
+    print '    Mappings to DATIM Indicators: ',
+    print '%s reference indicators with %s unique DATIM indicator mappings' % (
+        get_dict_child_counts(map_ref_indicator_to_datim_indicator))
 
-    # DEs and matched periods
-    print '  Periods mapped to DATIM Data Elements via Code Lists:',
-    print get_applicable_periods_from_de_concepts(de_concepts)
-    print '  Unique COC concepts:', len(coc_concepts)
-    print '  DATIM DE concepts: %s data elements with %s unique COC maps' % get_dict_child_counts(
+    # Data Element Mapping summaries
+    print '  Data Element to COC Mappings:'
+    print '    %s DATIM data elements with %s unique COC maps' % get_dict_child_counts(
         map_de_to_coc)
-    print '  PDH DDE concepts:',
-    print '%s derived data elements with %s unique COC maps' % get_dict_child_counts(
+    print '    %s PDH DDEs with %s unique COC maps' % get_dict_child_counts(
         map_pdh_dde_to_coc)
 
-    # DATIM Indicators
-    print '  DATIM Indicators:', len(datim_indicator_concepts)
-
-    # Codelists
+    # Codelist summary
     if verbosity >= 2:
         print ''
-    print '  Code Lists mapped to DATIM Data Elements: %s out of %s' % (
-        str(len(map_codelist_to_de)), str(len(codelists)))
+    print '  Codelists:'
+    print '    Code Lists with mappings to DATIM Data Elements: %s out of %s' % (
+        str(len(map_codelist_to_de)), str(len(codelist_collections)))
     if verbosity >= 2:
-        for codelist in codelists:
+        for codelist in codelist_collections:
             if codelist['external_id'] in map_codelist_to_de:
-                if verbosity >= 3:
-                    print '   ', codelist
-                else:
-                    print '    [%s] %s: %s data elements' % (
-                        codelist['external_id'], codelist['id'],
-                        len(map_codelist_to_de[codelist['external_id']]))
-        if len(codelists) - len(map_codelist_to_de):
-            print '\n  Code Lists with No Data Elements:', len(codelists) - len(map_codelist_to_de)
-            for codelist in codelists:
+                print '    [%s] %s: %s data elements' % (
+                    codelist['external_id'], codelist['id'],
+                    len(map_codelist_to_de[codelist['external_id']]))
+        if len(codelist_collections) - len(map_codelist_to_de):
+            print '\n  Code Lists with no mapped Data Elements: %s' % (
+                len(codelist_collections) - len(map_codelist_to_de))
+            for codelist in codelist_collections:
                 if codelist['external_id'] not in map_codelist_to_de:
-                    print '    ', codelist
-
-    # Summary for indicator-->DATIM DE maps
-    if verbosity >= 2:
-        print ''
-    (num_indicator_codes, num_indicator_to_de_maps) = get_dict_child_counts(
-        map_indicator_to_de)
-    print '  Reference Indicator Codes mapped to DATIM Data Elements:',
-    print '%s of %s reference indicator codes, %s Reference indicator-->DE maps' % (
-        num_indicator_codes, len(sorted_indicator_codes), num_indicator_to_de_maps)
-    if verbosity >= 2:
-        for indicator_url in map_indicator_to_de:
-            if map_indicator_to_de[indicator_url]:
-                indicator_code = indicator_url.split('/')[6]
-                print '    %s (%s)' % (indicator_code, len(map_indicator_to_de[indicator_url]))
-    if verbosity >= 2:
-        print ''
-    print '  Reference Indicator Codes with no DATIM DE Maps: %s Reference indicator codes' % str(
-        len(sorted_indicator_codes) - len(map_indicator_to_de))
-    if verbosity >= 2:
-        for indicator_code in sorted_indicator_codes:
-            indicator_url = '/orgs/%s/sources/%s/concepts/%s/' % (
-                org_id, source_id, indicator_code)
-            if indicator_url not in map_indicator_to_de:
-                print '    %s' % indicator_code
-
-    # Summary for indicator-->DDE maps
-    if verbosity >= 2:
-        print ''
-    (num_indicator_codes, num_indicator_to_dde_maps) = get_dict_child_counts(
-        map_indicator_to_pdh_dde)
-    print '  Reference Indicator Codes mapped to PDH Derived Data Elements:',
-    print '%s of %s Reference indicator codes, %s Reference indicator-->DDE maps' % (
-        num_indicator_codes, len(sorted_indicator_codes), num_indicator_to_dde_maps)
-    if verbosity >= 2:
-        for indicator_url in map_indicator_to_pdh_dde:
-            if map_indicator_to_pdh_dde[indicator_url]:
-                indicator_code = indicator_url.split('/')[6]
-                print '    %s (%s)' % (
-                    indicator_code, len(map_indicator_to_pdh_dde[indicator_url]))
-    if verbosity >= 2:
-        print ''
-
-    # Summary for reference indicators not mapped to PDH DDEs
-    standard_reference_indicators_not_mapped = []
-    for indicator_code in sorted_indicator_codes:
-        indicator_url = '/orgs/%s/sources/%s/concepts/%s/' % (
-            org_id, source_id, indicator_code)
-        if indicator_url not in map_indicator_to_pdh_dde:
-            standard_reference_indicators_not_mapped.append(indicator_code)
-    print '  Reference Indicator Codes with no PDH DDE Maps: %s indicator codes' % str(
-        len(standard_reference_indicators_not_mapped))
-    if verbosity >= 2:
-        for indicator_code in standard_reference_indicators_not_mapped:
-            print '    %s' % indicator_code
-
-
-def display_references_summary(
-        codelist_references=None,
-        datim_references=None, datim_indicator_references=None,
-        pdh_references=None, pdh_indicator_references=None,
-        mer_references=None, mer_indicator_references=None):
-    """ Displays a summary of the specified references """
-
-    # Codelist
-    print '\n  Codelist References: %s batches and %s expressions\n' % (
-        len(codelist_references), count_reference_expressions(codelist_references))
-    print '  DATIM References:'
-
-    # DATIM
-    for period in datim_references:
-        print '    %s: %s DE/COC batches and %s expressions' % (
-            period, len(datim_references[period]),
-            count_reference_expressions(datim_references[period]))
-        print '    %s: %s Indicator batches and %s expressions' % (
-            period, len(datim_indicator_references[period]),
-            count_reference_expressions(datim_indicator_references[period]))
-
-    # PDH
-    print '  PDH references:'
-    for period in pdh_references:
-        print '    %s: %s DE/COC batches and %s expressions' % (
-            period, len(pdh_references[period]),
-            count_reference_expressions(pdh_references[period]))
-        print '    %s: %s Indicator batches and %s expressions' % (
-            period, len(pdh_indicator_references[period]),
-            count_reference_expressions(pdh_indicator_references[period]))
-
-    # MER
-    print '  MER references:'
-    for period in mer_references:
-        print '    %s: %s DE/COC batches and %s expressions' % (
-            period, len(mer_references[period]),
-            count_reference_expressions(mer_references[period]))
-        print '    %s: %s Indicator batches and %s expressions' % (
-            period, len(mer_indicator_references[period]),
-            count_reference_expressions(mer_indicator_references[period]))
-
-
-def display_linkages_summary(verbosity=1, de_version_linkages=None,
-                             map_de_version_linkages=None,
-                             map_dde_source_linkages=None):
-    """ Display summary of linkages between data elements """
+                    print '    [%s] %s' % (codelist['external_id'], codelist['id'])
 
     # Summary for DE version linkages
     print '\nRESULTS OF GENERATING LINKAGES BETWEEN DATA ELEMENTS:'
@@ -308,6 +286,20 @@ def display_linkages_summary(verbosity=1, de_version_linkages=None,
     print '    %s derived data elements linked to %s source data elements' % get_dict_child_counts(
         map_dde_source_linkages)
     print '    NOTE: Source-derivation linkages are defined between data elements only, not COCs'
+
+
+def display_references_summary(ref_indicator_references=None, codelist_references=None):
+    """ Displays a summary of the specified references """
+
+    # Reference Indicators
+    print '\n  Reference Indicator References:'
+    for period in ref_indicator_references.keys():
+        print '    %s: %s expressions' % (
+            period, len(ref_indicator_references[period]["data"]["expressions"]))
+
+    # Codelist
+    print '\n  Codelist References: %s batches and %s expressions\n' % (
+        len(codelist_references), count_reference_expressions(codelist_references))
 
 
 def count_reference_expressions(references):
@@ -371,23 +363,39 @@ def get_new_repo_json(owner_type='Organization', owner_id='', repo_type='Source'
     }
 
 
-def load_datim_data_elements(filename=''):
+def load_datim_data_elements(filename='', org_id='', source_id='',
+                             sorted_ref_indicator_codes=None, codelist_collections=None,
+                             ref_indicator_concepts=None):
     """
-    Loads DATIM data elements from raw JSON file retrieved directly from DHIS2.
-    COCs and datasets are included as attributes of each data element.
+    Load raw DHIS2-formatted DATIM data elements and return as OCL-formatted JSON resources.
+    Note that COCs and datasets are included as attributes of each data element.
     """
+
+    # Load raw DHIS2-formatted DATIM data elements
     with open(filename, 'rb') as input_file:
         raw_datim_de_all = json.load(input_file)
-    return raw_datim_de_all
+
+    # Convert to OCL-formatted JSON
+    de_concepts = ocldev.oclresourcelist.OclJsonResourceList()
+    for de_raw in raw_datim_de_all['dataElements']:
+        de_concepts.append(build_concept_from_datim_de(
+            de_raw, org_id, source_id, sorted_ref_indicator_codes, codelist_collections,
+            ref_indicator_concepts))
+    return de_concepts
 
 
-def load_datim_cocs(filename=''):
-    """
-    Loads DATIM categoryOptionCombos from raw JSON file retrieved directly from DHIS2.
-    """
+def load_datim_coc_concepts(filename='', org_id='', source_id=''):
+    """ Load and return DATIM categoryOptionCombos as OCL-formatted JSON concepts """
+
+    # Load COCs as raw DHIS2-formatted JSON
     with open(filename, 'rb') as input_file:
         raw_datim_cocs = json.load(input_file)
-    return raw_datim_cocs
+
+    # Transform COCs to OCL-formatted JSON and return
+    coc_concepts = []
+    for coc_raw in raw_datim_cocs['categoryOptionCombos']:
+        coc_concepts.append(build_concept_from_datim_coc(coc_raw, org_id, source_id))
+    return ocldev.oclresourcelist.OclJsonResourceList(resources=coc_concepts)
 
 
 def fetch_datim_codelist(url_datim):
@@ -397,9 +405,9 @@ def fetch_datim_codelist(url_datim):
     return codelist_response.json()
 
 
-def load_codelists(filename='', org_id=''):
-    """ Loads codelists and returns as OCL-formatted JSON """
-    codelists = []
+def load_codelist_collections(filename='', org_id=''):
+    """ Load and return codelist_collections as OCL-formatted JSON collections """
+    csv_codelists = []
     with open(filename) as ifile:
         reader = csv.DictReader(ifile)
         for row in reader:
@@ -408,56 +416,74 @@ def load_codelists(filename='', org_id=''):
                 continue
             row['id'] = format_identifier(unformatted_id=row['id'])
             row['owner_id'] = org_id
-            codelists.append(row)
-
-    # Convert CSV records to OCL-formatted JSON
-    csv_converter = ocldev.oclcsvtojsonconverter.OclStandardCsvToJsonConverter(
-        input_list=codelists)
-    converted_codelists = csv_converter.process()
-    return converted_codelists
+            csv_codelists.append(row)
+    codelist_csv_resource_list = ocldev.oclresourcelist.OclCsvResourceList(resources=csv_codelists)
+    codelist_json_resource_list = codelist_csv_resource_list.convert_to_ocl_formatted_json()
+    return codelist_json_resource_list
 
 
-def load_datim_indicators(filename=''):
-    """ Loads DHIS2-formatted DATIM indicators and return without transforming """
+def load_datim_indicators(filename='', org_id='', source_id='',
+                          de_concepts=None, coc_concepts=None,
+                          sorted_ref_indicator_codes=None, ref_indicator_concepts=None):
+    """ Load DHIS2-formatted DATIM indicators and return as OCL-formatted concepts """
+
+    # Load raw DHIS2-formatted DATIM indicators
     with open(filename, 'rb') as input_file:
-        dhis2_indicators = json.load(input_file)
-    return dhis2_indicators['indicators']
+        raw_datim_indicators = json.load(input_file)
+
+    # Transform indicators to OCL-formatted JSON resources
+    datim_indicator_concepts = ocldev.oclresourcelist.OclJsonResourceList()
+    for indicator_raw in raw_datim_indicators['indicators']:
+        datim_indicator_concepts.append(build_concept_from_datim_indicator(
+            indicator_raw, org_id=org_id, source_id=source_id,
+            de_concepts=de_concepts, coc_concepts=coc_concepts,
+            sorted_ref_indicator_codes=sorted_ref_indicator_codes,
+            ref_indicator_concepts=ref_indicator_concepts))
+    return datim_indicator_concepts
 
 
-def load_reference_indicators(org_id='', source_id='', filenames=None):
+def load_ref_indicator_concepts(org_id='', source_id='', filenames=None):
     """ Loads reference indicators from MER guidance as OCL-formatted JSON """
     if not filenames:
         return []
-    reference_indicators = []
+    ref_indicator_concepts = []
     for filename in filenames:
         with open(filename) as ifile:
             reader = csv.DictReader(ifile)
             for row in reader:
                 row['owner_id'] = org_id
                 row['source'] = source_id
-                reference_indicators.append(row)
-
-    # Convert indicator CSV records to OCL-formatted JSON
-    csv_converter = ocldev.oclcsvtojsonconverter.OclStandardCsvToJsonConverter(
-        input_list=reference_indicators)
-    converted_reference_indicators = csv_converter.process()
+                ref_indicator_concepts.append(row)
+    ref_indicator_csv_list = ocldev.oclresourcelist.OclCsvResourceList(
+        resources=ref_indicator_concepts)
+    ref_indicator_json_list = ref_indicator_csv_list.convert_to_ocl_formatted_json()
 
     # Add throw-away attributes
-    for indicator in converted_reference_indicators:
-        indicator['__url'] = '/orgs/%s/sources/%s/concepts/%s/' % (
-            org_id, source_id, indicator['id'])
+    for ref_indicator in ref_indicator_json_list:
+        ref_indicator['__url'] = '/orgs/%s/sources/%s/concepts/%s/' % (
+            org_id, source_id, ref_indicator['id'])
 
-    return converted_reference_indicators
+    return ref_indicator_json_list
 
 
-def load_pdh(filename=''):
-    """ Loads PDH extract and returns in raw format """
-    pdh = []
+def load_pdh_dde_concepts(filename='', num_run_sequences=3, org_id='',
+                          source_id='', sorted_ref_indicator_codes=None,
+                          ref_indicator_concepts=None):
+    """ Load PDH Derived Data Element extract and return as OCL-formatted JSON concepts """
+
+    # Load raw PDH extract
+    pdh_raw = []
     with open(filename) as ifile:
         reader = csv.DictReader(ifile)
         for row in reader:
-            pdh.append(row)
-    return pdh
+            pdh_raw.append(row)
+
+    # Transform to OCL-formatted concepts and return
+    dde_concept_dict = build_all_pdh_dde_concepts(
+        pdh_raw, num_run_sequences=num_run_sequences, org_id=org_id,
+        source_id=source_id, sorted_ref_indicator_codes=sorted_ref_indicator_codes,
+        ref_indicator_concepts=ref_indicator_concepts)
+    return ocldev.oclresourcelist.OclJsonResourceList(list(dde_concept_dict.values()))
 
 
 def get_pdh_dde_numerator_or_denominator(de_name):
@@ -509,6 +535,7 @@ def get_pdh_dde_version(de_name):
 
 
 def get_pdh_dde_name_without_version(de_name):
+    """ Return name of a derived data element with version information stripped """
     de_version = get_pdh_dde_version(de_name=de_name)
     if de_version:
         return de_name.replace(' %s:' % de_version, ':')
@@ -546,27 +573,33 @@ def get_data_element_result_or_target(de_code=''):
     return 'Result'
 
 
-def lookup_indicator_code(de_code, sorted_indicator_codes):
+def lookup_indicator_code(de_name='', de_code='', de_applicable_periods=None,
+                          sorted_ref_indicator_codes=None, ref_indicator_concepts=None):
     """
     Returns an indicator code that matches the prefix of the data element code.
-    eg. TX_CURR would be returned for TX_CURR_N_DSD_Age_Sex. sorted_indicator_codes must be a
+    eg. TX_CURR would be returned for TX_CURR_N_DSD_Age_Sex. sorted_ref_indicator_codes must be a
     list of indicator codes sorted by string length in descending order.
     """
-    for indicator_code in sorted_indicator_codes:
-        if de_code[:len(indicator_code)] == indicator_code:
-            return indicator_code
+    for ref_indicator_code in sorted_ref_indicator_codes:
+        if (de_code[:len(ref_indicator_code)] == ref_indicator_code or
+                de_name[:len(ref_indicator_code)] == ref_indicator_code):
+            if de_applicable_periods:
+                for period in de_applicable_periods[::-1]:
+                    ref_indicator_concept = ref_indicator_concepts.get_resource(
+                        core_attrs={'id': ref_indicator_code}, custom_attrs={ATTR_PERIOD: period})
+                    if ref_indicator_concept:
+                        return ref_indicator_code
+            else:
+                return ref_indicator_code
     return ''
 
 
-def get_sorted_unique_indicator_codes(reference_indicators=None):
+def get_sorted_unique_indicator_codes(ref_indicator_concepts=None):
     """
     Returns a list of unique sorted indicator codes given a list of
     OCL-formatted reference indicators
     """
-    output = []
-    for indicator in reference_indicators:
-        if indicator['id'] not in output:
-            output.append(indicator['id'])
+    output = ref_indicator_concepts.summarize(core_attr_key='id').keys()
     output.sort(key=len, reverse=True)
     return output
 
@@ -593,11 +626,11 @@ def get_data_element_root(de_code=''):
         return de_code[:-len(de_version) - 1]
     return de_code
 
-def get_de_periods_from_codelists(de_codelists, codelists):
+def get_de_periods_from_codelist_collections(de_codelists, codelist_collections):
     """ Get a list of the periods present in a data element's codelists """
     periods = {}
     for de_codelist in de_codelists:
-        for codelist_def in codelists:
+        for codelist_def in codelist_collections:
             if de_codelist['id'] == codelist_def['external_id']:
                 for period in codelist_def['extras'][ATTR_APPLICABLE_PERIODS].split(', '):
                     periods[period] = True
@@ -609,7 +642,7 @@ def get_concepts_filtered_by_period(concepts=None, period=None):
     """
     Returns a list of concepts filtered by ATTR_PERIOD or ATTR_APPLICABLE_PERIODS
     custom attributes. Period filter may be a single period (eg 'FY18') or
-    a list of periods (eg ['FY18', 'FY19']). Works with reference_indicators and data
+    a list of periods (eg ['FY18', 'FY19']). Works with ref_indicator_concepts and data
     elements for both DATIM and PDH.
     """
 
@@ -666,7 +699,7 @@ def get_filtered_cocs(de_concepts=None, map_de_to_coc=None, coc_concepts=None):
     return cocs
 
 
-def get_filtered_codelists(codelists=None, period=None):
+def get_filtered_codelist_collections(codelist_collections=None, period=None):
     """ Returns list of code lists filtered by either a single period or a list of periods """
     if isinstance(period, basestring):
         period = [period]
@@ -674,15 +707,15 @@ def get_filtered_codelists(codelists=None, period=None):
         pass
     else:
         return []
-    filtered_codelists = []
-    for codelist in codelists:
+    filtered_codelist_collections = []
+    for codelist in codelist_collections:
         if (period and ATTR_APPLICABLE_PERIODS in codelist['extras'] and
                 any(codelist_period.strip() in period for codelist_period in codelist[
                     'extras'][ATTR_APPLICABLE_PERIODS].split(','))):
-            filtered_codelists.append(codelist)
+            filtered_codelist_collections.append(codelist)
         elif not period:
-            filtered_codelists.append(codelist)
-    return filtered_codelists
+            filtered_codelist_collections.append(codelist)
+    return filtered_codelist_collections
 
 
 def build_ocl_mappings(map_dict=None, filtered_from_concepts=None,
@@ -692,7 +725,7 @@ def build_ocl_mappings(map_dict=None, filtered_from_concepts=None,
     Returns a list of OCL-formatted mappings between from_concepts and to_concepts
     defined in map_dict. If filtered_from_concepts is provided, then maps are
     omitted if the from_concept is not in the filtered_from_concepts list. This
-    method is designed to work with mappings between reference_indicators and data elements,
+    method is designed to work with mappings between ref_indicator_concepts and data elements,
     and between data elements and COCs for DATIM and PDH.
     """
     output_mappings = []
@@ -709,27 +742,41 @@ def build_ocl_mappings(map_dict=None, filtered_from_concepts=None,
     return output_mappings
 
 
+def build_ref_indicator_references(ref_indicator_concepts, org_id=''):
+    """
+    Return a dictionary with period as key and OCL-formatted reference as value representing the
+    set of reference indicators that are valid for each period. Eg:
+        {"FY18": {"type": "Reference", "owner": "PEPFAR", "owner_type": "Organization",
+                  "collection": "MER_Reference_Indicators_FY18",
+                  "data": {"expressions": "/orgs/PEPFAR/sources/MER/concepts/HTS_TST/"}}}
+    """
+    output_references_by_period = {}
+    ref_indicator_period_counts = ref_indicator_concepts.summarize(custom_attr_key=ATTR_PERIOD)
+    for period in ref_indicator_period_counts.keys():
+        expressions = [
+            ref_indicator_concept['__url'] for ref_indicator_concept in
+            ref_indicator_concepts.get_resources(custom_attrs={ATTR_PERIOD: period})]
+        output_references_by_period[period] = {
+            'type': ocldev.oclconstants.OclConstants.RESOURCE_TYPE_REFERENCE,
+            'owner': org_id,
+            'owner_type': ocldev.oclconstants.OclConstants.RESOURCE_TYPE_ORGANIZATION,
+            'collection': COLLECTION_NAME_MER_REFERENCE_INDICATORS % period,
+            'data': {'expressions': expressions}
+        }
+    return output_references_by_period
+
+
 def build_codelist_references(map_codelist_to_de=None, map_de_to_coc=None,
-                              org_id='', codelists=None):
-    """
-    Returns a dictionary where keys are codelist IDs and values are a
-    list of references for data element and COC concepts to be included
-    in a codelist.
-    """
+                              org_id='', codelist_collections=None):
+    """ Return a list of batched references for data element and COC concepts for each codelist. """
     codelist_references = []
     for codelist_external_id in map_codelist_to_de:
-        # Get the codelist ID (the "code" from DATIM)
-        codelist_id = None
-        for codelist in codelists:
-            if codelist_external_id == codelist['external_id']:
-                codelist_id = codelist['id']
-                break
-
-        # Get the references for the codelist ID
-        if codelist_id:
+        codelist = codelist_collections.get_resource(
+            core_attrs={'external_id': codelist_external_id})
+        if codelist:
             codelist_references += get_mapped_concept_references(
                 from_concept_urls=map_codelist_to_de[codelist_external_id], map_dict=map_de_to_coc,
-                org_id=org_id, collection_id=codelist_id)
+                org_id=org_id, collection_id=codelist['id'])
     return codelist_references
 
 
@@ -737,10 +784,10 @@ def get_mapped_concept_references(from_concepts=None, from_concept_urls=None, ma
                                   org_id='', collection_id='', include_to_concept_refs=True,
                                   ignore_from_concepts_with_no_maps=True):
     """
-    Returns a list of references for the specified list of from concepts
-    and, optionally, their mapped to concepts. Supports mappings for
-    reference_indicators to data elements, and data elements to COCs for both DATIM
-    and PDH. Must provide either from_concepts or from_concept_urls.
+    Returns a list of references for the specified list of from concepts and, optionally, their
+    mapped to concepts. Supports mappings for ref_indicator_concepts to data elements/DATIM
+    indicators, and data elements to COCs for both DATIM and PDH. Must provide either from_concepts
+    or from_concept_urls.
     """
     output_references = []
     ref_from_concept_expressions = []
@@ -803,12 +850,12 @@ def get_mapped_concept_references_by_period(from_concepts=None, map_dict=None,
                                             include_all_period=False,
                                             ignore_from_concepts_with_no_maps=False):
     """
-    Returns dictionary with period as key, list of OCL-formatted references for
-    all specified concepts as value. If include_to_concept_refs is True, the
-    "to concepts" that each "from concept" points to are also included. If
-    include_all_period is True, a period with value of '*' is added that
-    includes all passed concepts regardless of period. Supports reference_indicators mapped
-    to both DATIM and PDH data elements and data elements mapped to COCs.
+    Returns dictionary with period as key, list of OCL-formatted references for all specified
+    concepts as value. If include_to_concept_refs is True, the "to concepts" that each "from
+    concept" points to are also included. If include_all_period is True, a period with value
+    of '*' is added that includes all passed concepts regardless of period. Compatible with
+    ref_indicator_concepts mapped to both DATIM and PDH data elements and data elements
+    mapped to COCs.
     """
     output_references = {}
     for period in periods:
@@ -827,20 +874,20 @@ def get_mapped_concept_references_by_period(from_concepts=None, map_dict=None,
     return output_references
 
 
-def build_mer_indicator_references(reference_indicators=None,
+def build_mer_indicator_references(ref_indicator_concepts=None,
                                    map_indicator_to_de=None, map_indicator_to_pdh_dde=None,
                                    org_id='', collection_id='', periods=None,
                                    include_to_concept_refs=False, include_all_period=False):
     """
     Returns a dictionary with period as key, list of OCL-formatted references
-    for all passed reference_indicators as value. Combines maps from reference_indicators to both
+    for all passed ref_indicator_concepts as value. Combines maps from ref_indicator_concepts to both
     DATIM and PDH data elements. If include_all_period is True, a period with
     value of '*' is added that spans all periods (and resources with no period).
     """
     combined_indicator_maps = map_indicator_to_de.copy()
     combined_indicator_maps.update(map_indicator_to_pdh_dde)
     combined_indicator_references = get_mapped_concept_references_by_period(
-        from_concepts=reference_indicators, map_dict=combined_indicator_maps,
+        from_concepts=ref_indicator_concepts, map_dict=combined_indicator_maps,
         org_id=org_id, collection_id=collection_id, periods=periods,
         include_to_concept_refs=include_to_concept_refs,
         include_all_period=include_all_period,
@@ -897,18 +944,18 @@ def get_repo_version_json(owner_type='Organization', owner_id='', repo_type='Sou
     }
 
 
-def get_codelists_formatted_for_display(codelists):
+def get_codelist_collections_formatted_for_display(codelist_collections):
     """
     Output a python dictionary of codelist definitions formatted for display in MSP
     """
     output_codelists = []
-    for codelist in codelists:
+    for codelist in codelist_collections:
         output_codelist = {
             'id': codelist['id'],
             'name': codelist['name'],
             'full_name': codelist['full_name'],
             'periods': codelist['extras'][ATTR_APPLICABLE_PERIODS].split(', '),
-            'codelist_type': codelist['extras']['Code List Type'],
+            'codelist_type': codelist['extras'][ATTR_RESULT_TARGET],
             'description': codelist.get('description', ''),
             'dataset_id': codelist['extras']['dataset_id']
         }
@@ -971,36 +1018,54 @@ def dedup_list_of_dicts(dup_dict):
     return dedup_list
 
 
-def get_applicable_periods_from_de_concepts(de_concepts):
-    """ Return list of unique ATTR_APPLICABLE_PERIODS from the specified DE concept list """
-    matched_periods = []
-    for de_concept_key in de_concepts:
-        if ATTR_APPLICABLE_PERIODS in de_concepts[de_concept_key]['extras']:
-            matched_periods = list(set().union(
-                matched_periods, de_concepts[de_concept_key]['extras'][ATTR_APPLICABLE_PERIODS]))
-    return matched_periods
+def summarize_applicable_periods_from_concepts(resource_list):
+    """
+    Return list of counts for each period in the ATTR_APPLICABLE_PERIODS custom attribute for
+    the specified resource list. Ex: {"FY18": 201, "FY19": 17}. Note that counts may add up to
+    more than the total number of resources because each resource may have more than one
+    applicable period.
+    """
+    period_counts = {}
+    for resource in resource_list:
+        if ATTR_APPLICABLE_PERIODS in resource['extras']:
+            for period in resource['extras'][ATTR_APPLICABLE_PERIODS]:
+                if period not in period_counts:
+                    period_counts[period] = 0
+                period_counts[period] += 1
+        else:
+            if None not in period_counts:
+                period_counts[None] = 0
+            period_counts[None] += 1
+    return period_counts
 
 
-def build_datim_indicator_concepts(datim_indicators, org_id, source_id,
-                                   de_concepts=None, coc_concepts=None):
-    """ """
-    indicator_concepts = {}
-    for indicator_raw in datim_indicators:
-        indicator_concept = build_concept_from_datim_indicator(
-            indicator_raw, org_id, source_id, de_concepts=de_concepts, coc_concepts=coc_concepts)
-        indicator_concepts[indicator_concept['__url']] = indicator_concept
-    return indicator_concepts
-
-
-def build_concept_from_datim_indicator(indicator_raw, org_id, source_id,
-                                       de_concepts=None, coc_concepts=None):
+def build_concept_from_datim_indicator(indicator_raw, org_id='', source_id='',
+                                       de_concepts=None, coc_concepts=None,
+                                       sorted_ref_indicator_codes=None,
+                                       ref_indicator_concepts=None):
     """
     Return an OCL-formatted concept for the specified DATIM indicator.
     If de_concepts and coc_concepts arguments are provided, extra attributes are included for the
     numerator/denominator in which the UIDs have been with human-readable codes or names.
     """
-    
-    # Build the base DATIM indicator concept
+
+    # Determine result/target for this DATIM indicator
+    if 'target' in indicator_raw['name'].lower():
+        result_target = 'Target'
+    elif 'result' in indicator_raw['name'].lower() or indicator_raw['name'].lower()[:3] != 'ea_':
+        result_target = 'Result'
+    else:
+        result_target = 'N/A'
+
+    # Determine period range for this DATIM indicator
+    indicator_periods = []
+    for period in MAP_PERIOD_TO_INDICATOR_TERMS:
+        for term in MAP_PERIOD_TO_INDICATOR_TERMS[period]:
+            if term.lower() in indicator_raw['name'].lower():
+                if period not in indicator_periods:
+                    indicator_periods.append(period)
+
+    # Build the DATIM indicator concept
     indicator_concept = {
         'type': 'Concept',
         'id': indicator_raw['id'],
@@ -1032,59 +1097,160 @@ def build_concept_from_datim_indicator(indicator_raw, org_id, source_id,
             'denominatorReadableFormula': replace_formula_uids_with_names(
                 formula=indicator_raw.get('denominator', ''), org_id=org_id, source_id=source_id,
                 de_concepts=de_concepts, coc_concepts=coc_concepts),
+            'denominatorParsedFormula': parse_indicator_formula(
+                formula=indicator_raw.get('denominator', ''), org_id=org_id, source_id=source_id,
+                de_concepts=de_concepts, coc_concepts=coc_concepts),
             'numerator': indicator_raw.get('numerator', ''),
             'numeratorDescription': indicator_raw.get('numeratorDescription', ''),
             'numeratorReadableFormula': replace_formula_uids_with_names(
                 formula=indicator_raw.get('numerator', ''), org_id=org_id, source_id=source_id,
                 de_concepts=de_concepts, coc_concepts=coc_concepts),
+            'numeratorParsedFormula': parse_indicator_formula(
+                formula=indicator_raw.get('numerator', ''), org_id=org_id, source_id=source_id,
+                de_concepts=de_concepts, coc_concepts=coc_concepts),
             'dimensionItemType': indicator_raw['dimensionItemType'],
+            ATTR_RESULT_TARGET: result_target,
+            ATTR_APPLICABLE_PERIODS: indicator_periods
         },
         '__url': ocldev.oclconstants.OclConstants.get_resource_url(
             owner_id=org_id, repository_id=source_id, resource_id=indicator_raw['id'],
             include_trailing_slash=True)
     }
+
+    # Determine mapped indicator code
+    ref_indicator_code = lookup_indicator_code(
+        de_name=indicator_raw['name'], de_code=indicator_raw['shortName'],
+        de_applicable_periods=indicator_periods,
+        sorted_ref_indicator_codes=sorted_ref_indicator_codes,
+        ref_indicator_concepts=ref_indicator_concepts)
+
+    if ref_indicator_code:
+        indicator_concept['extras']['indicator'] = ref_indicator_code
     if 'indicatorGroups' in indicator_raw and indicator_raw['indicatorGroups']:
         indicator_concept['extras']['indicatorGroups'] = indicator_raw['indicatorGroups']
 
     return indicator_concept
 
 
-def replace_formula_uids_with_names(formula, org_id, source_id, de_concepts, coc_concepts):
-    """ Replace UIDs in the numerator/denominator with human-readable codes or names """
-    regex = r'(#\{(?P<deuid>(?:\S|\d){11})(?:\}|(?:.(?P<cocuid>(?:\S|\d){11}))\}))'
+def parse_indicator_formula(formula, org_id, source_id, de_concepts, coc_concepts):
+    """
+    Return an array of parsed terms that appear in the specified indicator formula.
+    Each term consists of both UIDs and names for a data element and COC (if present).
+    Regex returns the following for each formula term:
+        [0]: full matched term
+        [1]: data element UID
+        [2]: COC UID, if present
+        [3]: Mechanism UID, if present
+    """
+    regex = r'(#\{(?P<deuid>(?:\S|\d){11})(?:\}|(?:.(?P<cocuid>(?:\S|\d){11}))(?:\}|(?:.(?P<mechanismuid>(?:\S|\d){11}))\})))'
     matches = re.findall(regex, formula)
-    new_formula = formula
-    for (full_match, de_uid, coc_uid) in matches:
+    parsed_formula = []
+    has_mechanism = False
+    for (full_match, de_uid, coc_uid, mechanism_uid) in matches:
         de_concept_name = ''
         coc_concept_name = ''
+        mechanism_name = ''
 
         # Get the DE name
         de_url = ocldev.oclconstants.OclConstants.get_resource_url(
             owner_id=org_id, repository_id=source_id, resource_id=de_uid,
             include_trailing_slash=True)
-        if de_url in de_concepts:
-            de_concept_name = get_concept_name_by_type(
-                de_concepts[de_url], ['Code', 'Short', 'Fully Specified'])
-            if de_concept_name:
-                de_concept_name = '[%s]' % de_concept_name
-            else:
+        de_concept = de_concepts.get_resource_by_url(de_url)
+        if de_concept:
+            de_concept_name = ocldev.oclresourcelist.OclResourceList.get_concept_name_by_type(
+                concept=de_concept, name_type=['Code', 'Short', 'Fully Specified'])
+            if not de_concept_name:
                 de_concept_name = de_uid
 
-        # Get the COC name
+        # Get the COC name, if present
         if coc_uid:
             coc_url = ocldev.oclconstants.OclConstants.get_resource_url(
                 owner_id=org_id, repository_id=source_id, resource_id=coc_uid,
                 include_trailing_slash=True)
-            if coc_url in coc_concepts:
-                coc_concept_name = get_concept_name_by_type(
-                    coc_concepts[coc_url], ['Code', 'Short', 'Fully Specified'])
+            coc_concept = coc_concepts.get_resource_by_url(coc_url)
+            if coc_concept:
+                coc_concept_name = ocldev.oclresourcelist.OclResourceList.get_concept_name_by_type(
+                    concept=coc_concept, name_type=['Code', 'Short', 'Fully Specified'])
+            if not coc_concept_name:
+                coc_concept_name = coc_uid
+
+        # TODO: Get the Mechanism name, if present
+        if mechanism_uid:
+            mechanism_name = mechanism_uid
+
+        # Add parsed formula term to the return array
+        parsed_formula_term = {
+            "full_term": full_match,
+            "data_element_uid": de_uid,
+            "data_element_name": de_concept_name}
+        if coc_uid:
+            parsed_formula_term["category_option_combo_uid"] = coc_uid
+            parsed_formula_term["category_option_combo_name"] = coc_concept_name
+        if mechanism_uid:
+            has_mechanism = True
+            parsed_formula_term["mechanism_uid"] = mechanism_uid
+            parsed_formula_term["mechanism_name"] = mechanism_name
+        parsed_formula.append(parsed_formula_term)
+
+    return parsed_formula
+
+
+def replace_formula_uids_with_names(formula, org_id, source_id, de_concepts, coc_concepts):
+    """
+    Return a formula string with UIDs replaced with human-readable codes or names.
+    Regex returns the following for each formula term:
+        [0]: full matched term
+        [1]: data element UID
+        [2]: COC UID, if present
+        [3]: Mechanism UID, if present
+    """
+    # regex = r'(#\{(?P<deuid>(?:\S|\d){11})(?:\}|(?:.(?P<cocuid>(?:\S|\d){11}))\}))'
+    regex = r'(#\{(?P<deuid>(?:\S|\d){11})(?:\}|(?:.(?P<cocuid>(?:\S|\d){11}))(?:\}|(?:.(?P<mechanismuid>(?:\S|\d){11}))\})))'
+    matches = re.findall(regex, formula)
+    new_formula = formula
+    for (full_match, de_uid, coc_uid, mechanism_uid) in matches:
+        de_concept_name = ''
+        coc_concept_name = ''
+        mechanism_name = ''
+
+        # Get the DE name
+        de_url = ocldev.oclconstants.OclConstants.get_resource_url(
+            owner_id=org_id, repository_id=source_id, resource_id=de_uid,
+            include_trailing_slash=True)
+        de_concept = de_concepts.get_resource_by_url(de_url)
+        de_concept_name = ''
+        if de_concept:
+            de_concept_name = ocldev.oclresourcelist.OclResourceList.get_concept_name_by_type(
+                concept=de_concept, name_type=['Code', 'Short', 'Fully Specified'])
+            if de_concept_name:
+                de_concept_name = '[%s]' % de_concept_name
+        if not de_concept_name:
+            de_concept_name = de_uid
+
+        # Get the COC name, if present
+        if coc_uid:
+            coc_concept_name = ''
+            coc_url = ocldev.oclconstants.OclConstants.get_resource_url(
+                owner_id=org_id, repository_id=source_id, resource_id=coc_uid,
+                include_trailing_slash=True)
+            coc_concept = coc_concepts.get_resource_by_url(coc_url)
+            if coc_concept:
+                coc_concept_name = ocldev.oclresourcelist.OclResourceList.get_concept_name_by_type(
+                    concept=coc_concept, name_type=['Code', 'Short', 'Fully Specified'])
             if coc_concept_name:
                 coc_concept_name = '[%s]' % coc_concept_name
             else:
                 coc_concept_name = coc_uid
 
+        # TODO: Get the Mechanism name, if present
+        if mechanism_uid:
+            mechanism_name = mechanism_uid
+
         # Replace the match in the formula with the human-readable names
-        if coc_uid:
+        if mechanism_uid:
+            new_formula = new_formula.replace(full_match, '{%s.%s.%s}' % (
+                de_concept_name, coc_concept_name, mechanism_name))
+        elif coc_uid:
             new_formula = new_formula.replace(full_match, '{%s.%s}' % (
                 de_concept_name, coc_concept_name))
         else:
@@ -1092,32 +1258,7 @@ def replace_formula_uids_with_names(formula, org_id, source_id, de_concepts, coc
 
     # Add whitespace around mathematical operators to improve readability
     new_formula = new_formula.replace('}+{', '} + {').replace('}-{', '} - {').replace('}*{', '} * {').replace('}/{', '} / {')
-
     return new_formula
-
-
-def get_concept_name_by_type(concept, name_type):
-    """ Get concept name by name_type or return None """
-    if 'names' not in concept:
-        return None
-    if isinstance(name_type, str):
-        name_type = [name_type]
-    if not isinstance(name_type, list):
-        raise Exception("Invalid name_type '%s'. Expected string or list." % type(name_type))
-    for current_name_type in name_type:
-        for concept_name in concept['names']:
-            if 'name_type' in concept_name and concept_name['name_type'] == current_name_type:
-                return concept_name['name']
-    return None
-
-
-def build_all_datim_coc_concepts(datim_cocs, org_id, source_id):
-    """ Return dictionary of OCL-formatted concepts for all DATIM COCs """
-    coc_concepts = {}
-    for coc_raw in datim_cocs['categoryOptionCombos']:
-        coc_concept = build_concept_from_datim_coc(coc_raw, org_id, source_id)
-        coc_concepts[coc_concept['__url']] = coc_concept
-    return coc_concepts
 
 
 def build_concept_from_datim_coc(coc_raw, org_id, source_id):
@@ -1147,17 +1288,8 @@ def build_concept_from_datim_coc(coc_raw, org_id, source_id):
     return coc_concept
 
 
-def build_all_datim_de_concepts(datim_de_all, org_id, source_id, sorted_indicator_codes, codelists):
-    """ Return dictionary of OCL-formatted concepts for all DATIM Data Elements """
-    de_concepts = {}
-    for de_raw in datim_de_all['dataElements']:
-        de_concept = build_concept_from_datim_de(
-            de_raw, org_id, source_id, sorted_indicator_codes, codelists)
-        de_concepts[de_concept['__url']] = de_concept
-    return de_concepts
-
-
-def build_concept_from_datim_de(de_raw, org_id, source_id, sorted_indicator_codes, codelists):
+def build_concept_from_datim_de(de_raw, org_id, source_id, sorted_ref_indicator_codes,
+                                codelist_collections, ref_indicator_concepts):
     """ Return an OCL-formatted concept for the specified DATIM data element """
 
     # Determine data element attributes
@@ -1200,7 +1332,7 @@ def build_concept_from_datim_de(de_raw, org_id, source_id, sorted_indicator_code
         'extras': {
             'source': 'DATIM',
             'data_element_root': de_code_root,
-        },
+        }
     }
 
     # Handle DE code (not all DEs have codes)
@@ -1212,13 +1344,8 @@ def build_concept_from_datim_de(de_raw, org_id, source_id, sorted_indicator_code
             'locale_preferred': False,
             'external_id': None,
         })
-        de_indicator_code = lookup_indicator_code(
-            de_code=de_raw['code'],
-            sorted_indicator_codes=sorted_indicator_codes)
-        if de_indicator_code:
-            de_concept['extras']['indicator'] = de_indicator_code
 
-    # Handle DE description
+    # Handle DE description (most DEs do not have descriptions)
     if 'description' in de_raw and de_raw['description']:
         de_concept['descriptions'] = [
             {
@@ -1232,17 +1359,31 @@ def build_concept_from_datim_de(de_raw, org_id, source_id, sorted_indicator_code
 
     # Process DE's dataSets and codelists
     de_codelists = []
+    de_applicable_periods = []
     if 'dataSetElements' in de_raw and de_raw['dataSetElements']:
         de_concept['extras']['dataSets'] = []
         for dataset in de_raw['dataSetElements']:
             de_concept['extras']['dataSets'].append(dataset['dataSet'])
-            for codelist in codelists:
+            for codelist in codelist_collections:
                 if codelist['external_id'] == dataset['dataSet']['id']:
                     de_codelists.append(dataset['dataSet'])
                     break
         de_concept['extras']['codelists'] = de_codelists
-        de_concept['extras'][ATTR_APPLICABLE_PERIODS] = get_de_periods_from_codelists(
-            de_codelists=de_codelists, codelists=codelists)
+        de_applicable_periods = get_de_periods_from_codelist_collections(
+            de_codelists=de_codelists, codelist_collections=codelist_collections)
+
+    # Determine mapped indicator code
+    de_indicator_code = lookup_indicator_code(
+        de_name=de_raw['name'], de_code=de_raw.get('code', ''),
+        de_applicable_periods=de_applicable_periods,
+        sorted_ref_indicator_codes=sorted_ref_indicator_codes,
+        ref_indicator_concepts=ref_indicator_concepts)
+
+    # Determine DE reporting frequency (needs name, indicator, result/target, & period)
+    de_reporting_frequency = get_de_reporting_frequency(
+        de_name=de_raw['name'], de_indicator_code=de_indicator_code,
+        de_result_or_target=de_result_or_target, de_applicable_periods=de_applicable_periods,
+        ref_indicator_concepts=ref_indicator_concepts)
 
     # Set DE custom attributes
     if 'dataElementGroups' in de_raw and de_raw['dataElementGroups']:
@@ -1253,6 +1394,8 @@ def build_concept_from_datim_de(de_raw, org_id, source_id, sorted_indicator_code
         de_concept['extras']['valueType'] = de_raw['valueType']
     if 'aggregationType' in de_raw and de_raw['aggregationType']:
         de_concept['extras']['aggregationType'] = de_raw['aggregationType']
+    if de_applicable_periods:
+        de_concept['extras'][ATTR_APPLICABLE_PERIODS] = de_applicable_periods
     if de_version:
         de_concept['extras']['data_element_version'] = de_version
     if de_numerator_or_denominator:
@@ -1260,7 +1403,11 @@ def build_concept_from_datim_de(de_raw, org_id, source_id, sorted_indicator_code
     if de_support_type:
         de_concept['extras']['pepfarSupportType'] = de_support_type
     if de_result_or_target:
-        de_concept['extras']['resultTarget'] = de_result_or_target
+        de_concept['extras'][ATTR_RESULT_TARGET] = de_result_or_target
+    if de_indicator_code:
+        de_concept['extras']['indicator'] = de_indicator_code
+    if de_reporting_frequency:
+        de_concept['extras'][ATTR_REPORTING_FREQUENCY] = de_reporting_frequency
 
     # Add throw-away attributes that are used later in processing
     de_concept['__url'] = '/orgs/%s/sources/%s/concepts/%s/' % (org_id, source_id, de_concept_id)
@@ -1269,34 +1416,61 @@ def build_concept_from_datim_de(de_raw, org_id, source_id, sorted_indicator_code
     return de_concept
 
 
+def get_de_reporting_frequency(de_name='', de_result_or_target='', de_indicator_code='',
+                               de_applicable_periods=None, ref_indicator_concepts=None):
+    """
+    Get the reporting frequency for a data element based on its name, result/target, and linked
+    reference indicator. Possible values are: "Daily", "Quarterly", "Semi-Annually", "Annually".
+    """
+    if 'sims' in de_name.lower():
+        return 'Daily'
+    elif de_result_or_target == 'Target':
+        return 'Annually'
+    elif de_indicator_code:
+        if de_applicable_periods:
+            for period in de_applicable_periods[::-1]:
+                ref_indicator_concept = ref_indicator_concepts.get_resource(
+                    core_attrs={'id': de_indicator_code}, custom_attrs={ATTR_PERIOD: period})
+                if (ref_indicator_concept and
+                        ATTR_REPORTING_FREQUENCY in ref_indicator_concept['extras']):
+                    return ref_indicator_concept['extras'][ATTR_REPORTING_FREQUENCY]
+        else:
+            ref_indicator_concept = ref_indicator_concepts.get_resource(
+                core_attrs={'id': de_indicator_code})
+            if (ref_indicator_concept and
+                    ATTR_REPORTING_FREQUENCY in ref_indicator_concept['extras']):
+                return ref_indicator_concept['extras'][ATTR_REPORTING_FREQUENCY]
+    return ''
+
+
 def build_linkages_de_version(de_concepts=None):
-    """ Get a dictionary of DEs that have multiple versions """
+    """ Return a dictionary describing DEs that have multiple versions. """
 
     # Build dictionary of DEs, grouping different versions of a DE together
     de_all_versions = {}
-    for concept_url in de_concepts:
-        if 'data_element_root' not in de_concepts[concept_url]['extras']:
+    for de_concept in de_concepts:
+        if 'data_element_root' not in de_concept['extras']:
             continue
-        de_code = de_concepts[concept_url]['extras']['data_element_root']
-        if de_code not in de_all_versions:
-            de_all_versions[de_code] = []
-        if 'data_element_version' in de_concepts[concept_url]['extras']:
-            de_code += '_%s' % de_concepts[concept_url]['extras']['data_element_version']
-        de_version = de_concepts[concept_url]['extras'].get('data_element_version', '')
+        de_root_code = de_concept['extras']['data_element_root']
+        if de_root_code not in de_all_versions:
+            de_all_versions[de_root_code] = []
+        if 'data_element_version' in de_concept['extras']:
+            de_root_code += '_%s' % de_concept['extras']['data_element_version']
+        de_version = de_concept['extras'].get('data_element_version', '')
         de_sort_order = 1 if not de_version else int(de_version[1:])
-        de_all_versions[de_concepts[concept_url]['extras']['data_element_root']].append({
-            'url': concept_url,
-            'code': de_code,
+        de_all_versions[de_concept['extras']['data_element_root']].append({
+            'url': de_concept['__url'],
+            'code': de_root_code,
             'version': de_version,
-            'sort_order': de_sort_order,
+            'sort_order': de_sort_order
         })
 
     # Only return those with more than one record
     de_filtered_versions = {}
-    for de_code in de_all_versions:
-        if len(de_all_versions[de_code]) > 1:
-            de_filtered_versions[de_code] = sorted(
-                de_all_versions[de_code], key = lambda i: i['sort_order'])
+    for de_root_code in de_all_versions:
+        if len(de_all_versions[de_root_code]) > 1:
+            de_filtered_versions[de_root_code] = sorted(
+                de_all_versions[de_root_code], key=lambda i: i['sort_order'])
     return de_filtered_versions
 
 
@@ -1305,34 +1479,36 @@ def build_linkages_dde_version(pdh_dde_concepts=None):
 
     # Build dictionary of DEs, grouping different versions of a DE together
     de_all_versions = {}
-    for de_concept_url in pdh_dde_concepts:
-        de_name = pdh_dde_concepts[de_concept_url]['names'][0]['name']
+    for de_concept in pdh_dde_concepts:
+        de_name = de_concept['names'][0]['name']
         de_name_without_version = get_pdh_dde_name_without_version(de_name=de_name)
         if de_name_without_version not in de_all_versions:
             de_all_versions[de_name_without_version] = []
-        de_version = pdh_dde_concepts[de_concept_url]['extras'].get('data_element_version', '')
+        de_version = de_concept['extras'].get('data_element_version', '')
         de_sort_order = 1 if not de_version else int(de_version[1:])
         de_all_versions[de_name_without_version].append({
-            'url': de_concept_url,
+            'url': de_concept['__url'],
             'code': de_name,
             'version': de_version,
-            'sort_order': de_sort_order,
+            'sort_order': de_sort_order
         })
 
     # Only return those with more than one record
     de_filtered_versions = {}
-    for de_code in de_all_versions:
-        if len(de_all_versions[de_code]) > 1:
-            de_filtered_versions[de_code] = sorted(
-                de_all_versions[de_code], key = lambda i: i['sort_order'])
+    for de_root_code in de_all_versions:
+        if len(de_all_versions[de_root_code]) > 1:
+            de_filtered_versions[de_root_code] = sorted(
+                de_all_versions[de_root_code], key=lambda i: i['sort_order'])
     return de_filtered_versions
 
 
-def build_maps_from_de_linkages(de_linkages=None, owner_id='', source_id=''):
-    """ """
+def build_maps_from_de_linkages(de_linkages=None):
+    """
+    Return a dictionary representing data element version linkages, where a data element URL is
+    the key and a list of one or more data element URLs that were "replaced by" as the value.
+    """
     map_de_linkages = {}
     for de_linkage_code in de_linkages:
-        # de_replaced_to_concept = de_linkages[de_linkage_code][0]
         de_replaced_by_from_concept = de_linkages[de_linkage_code][0]
         for index in range(1, len(de_linkages[de_linkage_code])):
             de_replaced_to_concept = de_replaced_by_from_concept
@@ -1342,93 +1518,97 @@ def build_maps_from_de_linkages(de_linkages=None, owner_id='', source_id=''):
             if de_replaced_to_concept['url'] not in map_de_linkages[de_replaced_by_from_concept['url']]:
                 map_de_linkages[de_replaced_by_from_concept['url']].append(
                     de_replaced_to_concept['url'])
-            # map_de_linkages.append({
-            #     'type': 'Mapping',
-            #     'owner': owner_id,
-            #     'owner_type': 'Organization',
-            #     'source': source_id,
-            #     'map_type': MSP_MAP_TYPE_REPLACES,
-            #     'from_concept_url': de_replaced_by_from_concept['url'],
-            #     'to_concept_url': de_replaced_to_concept['url'],
-            # })
     return map_de_linkages
 
 
 def build_linkages_source_de(pdh_dde_concepts=None, owner_id='', source_id=''):
-    """  """
+    """
+    Return a dictionary representing linkages between PDH derived data elements and their
+    source data elements. The keys are the derived data element URLs, and values are lists of
+    source data element URLs.
+    :param pdh_dde_concepts:
+    :param owner_id:
+    :param source_id:
+    :return:
+    """
     dde_source_linkages = {}
-    for dde_concept_url in pdh_dde_concepts:
-        if dde_concept_url not in dde_source_linkages:
-            dde_source_linkages[dde_concept_url] = []
-        for source_linkage in pdh_dde_concepts[dde_concept_url]['extras']['source_data_elements']:
+    for de_concept in pdh_dde_concepts:
+        if de_concept['__url'] not in dde_source_linkages:
+            dde_source_linkages[de_concept['__url']] = []
+        for source_linkage in de_concept['extras']['source_data_elements']:
             source_de_url = '/orgs/%s/sources/%s/concepts/%s/' % (
                 owner_id, source_id, source_linkage['source_data_element_uid'])
-            if source_de_url not in dde_source_linkages[dde_concept_url]:
-                dde_source_linkages[dde_concept_url].append(source_de_url)
+            if source_de_url not in dde_source_linkages[de_concept['__url']]:
+                dde_source_linkages[de_concept['__url']].append(source_de_url)
     return dde_source_linkages
 
 
-def build_indicator_to_de_maps(de_concepts, sorted_indicator_codes, org_id, source_id):
+def build_ref_indicator_to_child_resource_maps(child_concepts=None, sorted_ref_indicator_codes=None,
+                                               org_id='', source_id=''):
     """
-    Dictionary with indicator_code as key and list of DE URLs as value.
-    Note that data elements not associated with an indicator are omitted.
+    Return dictionary with reference indicator URL as key and list of child concept URLs as value.
+    Compatible with DATIM data elements, PDH derived data elements, DATIM indicators, or any other
+    list of resources with an 'indicator' custom attribute specifying the mapped reference indicator
+    code and a '__url' core attribute. Child resources that with an unrecognized or missing
+    reference indicator code are omitted.
     """
-    map_indicator_to_de = {}
-    for de_concept_url in de_concepts:
-        if ('indicator' in de_concepts[de_concept_url]['extras'] and
-                de_concepts[de_concept_url]['extras']['indicator'] in sorted_indicator_codes):
-            de_indicator_code = de_concepts[de_concept_url]['extras']['indicator']
+    map_indicator_to_child_resource = {}
+    for child_concept in child_concepts:
+        if ('indicator' in child_concept['extras'] and
+                child_concept['extras']['indicator'] in sorted_ref_indicator_codes):
+            de_indicator_code = child_concept['extras']['indicator']
             indicator_concept_url = '/orgs/%s/sources/%s/concepts/%s/' % (
                 org_id, source_id, de_indicator_code)
-            if indicator_concept_url not in map_indicator_to_de:
-                map_indicator_to_de[indicator_concept_url] = []
-            map_indicator_to_de[indicator_concept_url].append(de_concept_url)
-    return map_indicator_to_de
+            if indicator_concept_url not in map_indicator_to_child_resource:
+                map_indicator_to_child_resource[indicator_concept_url] = []
+            map_indicator_to_child_resource[indicator_concept_url].append(child_concept['__url'])
+    return map_indicator_to_child_resource
 
 
 def build_de_to_coc_maps(de_concepts, coc_concepts, org_id, source_id):
-    """ Returns dictionary with DE URL as key and list of COC URLs as value """
+    """ Return dictionary with DE URL as key and list of COC URLs as value """
     map_de_to_coc = {}
-    for de_concept_url in de_concepts:
-        for coc_raw in de_concepts[de_concept_url]['__cocs']:
+    for de_concept in de_concepts:
+        if de_concept['__url'] not in map_de_to_coc:
+            map_de_to_coc[de_concept['__url']] = []
+        for coc_raw in de_concept['__cocs']:
             coc_concept_url = '/orgs/%s/sources/%s/concepts/%s/' % (
                 org_id, source_id, coc_raw['id'])
-            if de_concept_url not in map_de_to_coc:
-                map_de_to_coc[de_concept_url] = []
-            if coc_concept_url not in coc_concepts:
-                raise Exception("Houston, we've got a problem. COC not found.")
-            map_de_to_coc[de_concepts[de_concept_url]['__url']].append(coc_concept_url)
+            coc_concept = coc_concepts.get_resource_by_url(coc_concept_url)
+            if not coc_concept:
+                raise Exception("Houston, we've got a problem. COC not found: %s" % coc_concept_url)
+            map_de_to_coc[de_concept['__url']].append(coc_concept_url)
     return map_de_to_coc
 
 
 def build_codelist_to_de_map(de_concepts):
     """ Returns dictionary with Codelist ID as key and list of DE URLs as value """
     map_codelist_to_de = {}
-    for de_concept_url in de_concepts:
-        if 'codelists' in de_concepts[de_concept_url]['extras']:
-            for de_codelist in de_concepts[de_concept_url]['extras']['codelists']:
+    for de_concept in de_concepts:
+        if 'codelists' in de_concept['extras']:
+            for de_codelist in de_concept['extras']['codelists']:
                 if de_codelist['id'] not in map_codelist_to_de:
                     map_codelist_to_de[de_codelist['id']] = []
-                map_codelist_to_de[de_codelist['id']].append(de_concept_url)
+                map_codelist_to_de[de_codelist['id']].append(de_concept['__url'])
     return map_codelist_to_de
 
 
 def get_pdh_rule_applicable_periods(pdh_row):
     """
-    Return a string representing the period of validity for a PDH derived data element
+    Return a list of strings representing the period of validity for a PDH derived data element.
+    For example: ["FY18", "FY19"]
 
     The first target period or quarter period that the rule began.
         Uses format YYYY0000 = Target or annual data; YYYY0100 is Q1, YYYY0400 is Q4, etc
     The last period the rule is valid or 99990400 represents no end date
     """
-    begin_year, begin_quarter = parse_pdh_rule_period(pdh_row['rule_begin_period'])
-    end_year, end_quarter = parse_pdh_rule_period(pdh_row['rule_end_period'])
+    begin_year, begin_quarter = parse_pdh_rule_period(pdh_row[PDH_COLUMN_RULE_BEGIN_PERIOD])
+    end_year, end_quarter = parse_pdh_rule_period(pdh_row[PDH_COLUMN_RULE_END_PERIOD])
     if end_year == '9999':
-        end_year = '2020'
+        end_year = PDH_RULE_PERIOD_END_YEAR
     applicable_periods = []
     for fiscal_year in range(int(begin_year[2:4]), int(end_year[2:4]) + 1):
         applicable_periods.append('FY%s' % str(fiscal_year))
-    # return ', '.join(applicable_periods)
     return applicable_periods
 
 
@@ -1456,8 +1636,8 @@ def get_data_element_name_modifiers(de_name):
     return ''
 
 
-def build_all_pdh_dde_concepts(pdh_raw, pdh_num_run_sequences, org_id, source_id,
-                               sorted_indicator_codes):
+def build_all_pdh_dde_concepts(pdh_raw, num_run_sequences=3, org_id='', source_id='',
+                               sorted_ref_indicator_codes=None, ref_indicator_concepts=None):
     """
     Returns dictionary with unique DDE URL as key and DDE concept as value.
     Iterates thru PDH rows once per run sequence. The first run sequence relies
@@ -1466,7 +1646,7 @@ def build_all_pdh_dde_concepts(pdh_raw, pdh_num_run_sequences, org_id, source_id
     explicitly in the PDH source data.
     """
     pdh_dde_concepts = {}
-    for i in range(pdh_num_run_sequences):
+    for i in range(num_run_sequences):
         current_run_sequence_str = str(i + 1)
         for pdh_row in pdh_raw:
             # Skip data elements directly from DATIM or in a different run sequence
@@ -1479,7 +1659,7 @@ def build_all_pdh_dde_concepts(pdh_raw, pdh_num_run_sequences, org_id, source_id
                 org_id, source_id, pdh_row[PDH_COLUMN_DERIVED_DATA_ELEMENT_UID])
             if dde_concept_url not in pdh_dde_concepts:
                 dde_concept = build_concept_from_pdh_dde(
-                    pdh_row, org_id, source_id, sorted_indicator_codes)
+                    pdh_row, org_id, source_id, sorted_ref_indicator_codes, ref_indicator_concepts)
                 pdh_dde_concepts[dde_concept_url] = dde_concept
 
             # Set the current source DE/COC to the DDE's custom attribute
@@ -1503,8 +1683,11 @@ def build_all_pdh_dde_concepts(pdh_raw, pdh_num_run_sequences, org_id, source_id
     return pdh_dde_concepts
 
 
-def build_concept_from_pdh_dde(pdh_row, org_id, source_id, sorted_indicator_codes):
+def build_concept_from_pdh_dde(pdh_row, org_id, source_id, sorted_ref_indicator_codes,
+                               ref_indicator_concepts):
     """ Return an OCL-formatted concept for the specified PDH derived data element """
+    de_applicable_periods = get_pdh_rule_applicable_periods(pdh_row)
+    de_result_or_target = pdh_row[PDH_COLUMN_RESULT_TARGET].lower().capitalize()
     dde_concept = {
         'type': 'Concept',
         'id': pdh_row[PDH_COLUMN_DERIVED_DATA_ELEMENT_UID],
@@ -1518,14 +1701,14 @@ def build_concept_from_pdh_dde(pdh_row, org_id, source_id, sorted_indicator_code
         'descriptions': None,
         'extras': {
             'source': 'PDH',
-            'resultTarget': pdh_row[PDH_COLUMN_RESULT_TARGET].lower().capitalize(),
+            ATTR_RESULT_TARGET: de_result_or_target,
             'pdh_indicator_code': pdh_row[PDH_COLUMN_INDICATOR],
             'disaggregate': pdh_row[PDH_COLUMN_DISAGGREGATE],
             'standardized_disaggregate': pdh_row[PDH_COLUMN_STANDARDIZED_DISAGGREGATE],
             'pdh_derivation_rule_id': pdh_row[PDH_COLUMN_RULE_ID],
             'pdh_rule_begin_period': pdh_row[PDH_COLUMN_RULE_BEGIN_PERIOD],
             'pdh_rule_end_period': pdh_row[PDH_COLUMN_RULE_END_PERIOD],
-            ATTR_APPLICABLE_PERIODS: get_pdh_rule_applicable_periods(pdh_row),
+            ATTR_APPLICABLE_PERIODS: de_applicable_periods,
             'source_data_elements': []
         },
         'names': [
@@ -1539,14 +1722,27 @@ def build_concept_from_pdh_dde(pdh_row, org_id, source_id, sorted_indicator_code
         ]
     }
 
+    # Determine mapped indicator code
+    dde_standard_indicator_code = lookup_indicator_code(
+        de_name=pdh_row[PDH_COLUMN_INDICATOR],
+        de_applicable_periods=de_applicable_periods,
+        sorted_ref_indicator_codes=sorted_ref_indicator_codes,
+        ref_indicator_concepts=ref_indicator_concepts)
+
+    # Determine DE reporting frequency (needs name, indicator, result/target, & period)
+    de_reporting_frequency = get_de_reporting_frequency(
+        de_name=pdh_row[PDH_COLUMN_DERIVED_DATA_ELEMENT_NAME],
+        de_indicator_code=dde_standard_indicator_code,
+        de_result_or_target=de_result_or_target,
+        de_applicable_periods=de_applicable_periods,
+        ref_indicator_concepts=ref_indicator_concepts)
+
     # Set DE custom attributes
     dde_version = get_pdh_dde_version(pdh_row[PDH_COLUMN_DERIVED_DATA_ELEMENT_NAME])
     dde_numerator_or_denominator = get_pdh_dde_numerator_or_denominator(
         pdh_row[PDH_COLUMN_DERIVED_DATA_ELEMENT_NAME])
     dde_support_type = get_pdh_dde_support_type(
         pdh_row[PDH_COLUMN_DERIVED_DATA_ELEMENT_NAME])
-    dde_standard_indicator_code = lookup_indicator_code(
-        pdh_row[PDH_COLUMN_INDICATOR], sorted_indicator_codes)
     if dde_version:
         dde_concept['extras']['data_element_version'] = dde_version
     if dde_numerator_or_denominator:
@@ -1555,6 +1751,8 @@ def build_concept_from_pdh_dde(pdh_row, org_id, source_id, sorted_indicator_code
         dde_concept['extras']['pepfarSupportType'] = dde_support_type
     if dde_standard_indicator_code:
         dde_concept['extras']['indicator'] = dde_standard_indicator_code
+    if de_reporting_frequency:
+        dde_concept['extras'][ATTR_REPORTING_FREQUENCY] = de_reporting_frequency
 
     # Set throwaway attributes
     dde_concept['__url'] = '/orgs/%s/sources/%s/concepts/%s/' % (
@@ -1566,19 +1764,30 @@ def build_concept_from_pdh_dde(pdh_row, org_id, source_id, sorted_indicator_code
 
 def build_pdh_dde_to_coc_maps(pdh_dde_concepts, coc_concepts=None):
     """
-    Returns dictionary with DDE URL as key and list of COC URLs as value.
+    Return dictionary with DDE URL as key and list of COC URLs as value.
     If coc_concepts provided, validates that each derived COC is present
     in the coc_concepts list.
     """
     map_pdh_dde_to_coc = {}
-    for pdh_dde_concept_url in pdh_dde_concepts:
-        map_pdh_dde_to_coc[pdh_dde_concept_url] = []
-        for coc_url in pdh_dde_concepts[pdh_dde_concept_url]['__cocs']:
-            if coc_url not in coc_concepts:
-                print 'Hello Houston, we have a problem! Missing DCOC:', coc_url
-            elif coc_url not in map_pdh_dde_to_coc[pdh_dde_concept_url]:
-                map_pdh_dde_to_coc[pdh_dde_concept_url].append(coc_url)
+    for pdh_dde_concept in pdh_dde_concepts:
+        map_pdh_dde_to_coc[pdh_dde_concept['__url']] = []
+        for coc_url in pdh_dde_concept['__cocs']:
+            coc_concept = coc_concepts.get_resource_by_url(coc_url)
+            if not coc_concept:
+                err_msg = 'Houston, we have a problem! COC for derived data element not found:' % coc_url
+                raise Exception(err_msg)
+            if coc_url not in map_pdh_dde_to_coc[pdh_dde_concept['__url']]:
+                map_pdh_dde_to_coc[pdh_dde_concept['__url']].append(coc_url)
     return map_pdh_dde_to_coc
+
+    # for pdh_dde_concept_url in pdh_dde_concepts:
+    #     map_pdh_dde_to_coc[pdh_dde_concept_url] = []
+    #     for coc_url in pdh_dde_concepts[pdh_dde_concept_url]['__cocs']:
+    #         if coc_url not in coc_concepts:
+    #             print 'Hello Houston, we have a problem! Missing DCOC:', coc_url
+    #         elif coc_url not in map_pdh_dde_to_coc[pdh_dde_concept_url]:
+    #             map_pdh_dde_to_coc[pdh_dde_concept_url].append(coc_url)
+    # return map_pdh_dde_to_coc
 
 
 def get_datim_codelist_stats(codelist_datim):
