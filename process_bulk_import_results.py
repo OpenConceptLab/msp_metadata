@@ -4,7 +4,7 @@ import ocldev.oclfleximporter
 
 
 # Settings
-results_filename = 'logs/linkages_msp_results_PEPFAR-Test7_FY16_20_20200330.json'
+results_filename = 'logs/import_results.json'
 
 # Load results into an OclImportResults object
 with open(results_filename) as ifile:
@@ -17,13 +17,24 @@ pprint.pprint(import_results.get_stats())
 print import_results.get_import_results(
     results_mode=ocldev.oclfleximporter.OclImportResults.OCL_IMPORT_RESULTS_MODE_SUMMARY)
 
-logging_keys = import_results.get_logging_keys()
+# root_key = import_results.get_logging_keys()[0]
+results = import_results._results
+root_key = results.keys()[0]
+pprint.pprint(results[root_key]['NEW']['400'][0])
 
-pprint.pprint(logging_keys)
 exit()
 
-# pprint.pprint(logging_keys)
-root_key = '/orgs/PEPFAR-Test1/sources/MER/'
+count_duplicate_mappings = 0
+count_something_else = 0
+for result in results[root_key]['NEW']['400']:
+    if 'errors' in result['message'] and 'must be unique' in result['message']:
+        count_duplicate_mappings += 1
+    else:
+        count_something_else += 1
+        print result['message']
+print 'Duplicate mappings: %s, Other: %s' % (count_duplicate_mappings, count_something_else)
+exit()
+
 print import_results.get_import_results(
     results_mode=ocldev.oclfleximporter.OclImportResults.OCL_IMPORT_RESULTS_MODE_SUMMARY,
     root_key=root_key)

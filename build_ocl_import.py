@@ -16,22 +16,6 @@ TO DO ROUND 9 IMPORT:
 * Include Mechanism name in DATIM indicator formulas with 3 UIDs (???)
 
 ROUND 9 TICKETS: #719, #742, #736
-
-COMPLETED FOR ROUND 8 IMPORT:
-* Update model so that Reference Indicators from previous periods are easily accessible via API (#707)
-* Add 'indicator' custom attribute to DATIM indicators
-* Import updated MER Reference Indicators from google spreadsheets (#701)
-* Generate DATIM Indicator attributes to support filters for indicator group, time period of
-  validity, and results/targets (#737)
-* DATIM indicator linkages to Data Elements used in its formula (either as mappings, as a custom
-  attribute with an easily parseable JSON list, or both). Note that #717 suggests modeling the
-  JSON attribute similar to how derivations are modeled -- analyze whether that approach makes
-  sense (#713 / #717)
-* Additional data element filters: Numerator/Denominator, Pepfar Support Type
-* Change codelists to use "resultTarget=Result/Target" -- new attribute name and singular "Result"
-* Fix rule that sets Result/Target attribute for DATIM data elements
-
-ROUND 8 TICKETS READY FOR IMPORT & REVIEW: #701, #707, #713, #717, #737
 """
 import json
 import ocldev.oclresourcelist
@@ -282,5 +266,13 @@ if settings.OUTPUT_OCL_FORMATTED_JSON:
     # import_list_dedup = msp.dedup_list_of_dicts(import_list._resources)
 
     # Output import list
-    for resource in import_list:
-        print json.dumps(resource)
+    if import_list:
+        chunked_import_lists = import_list.chunk(settings.IMPORT_LIST_CHUNK_SIZE)
+        iteration = 0
+        for chunked_import_list in chunked_import_lists:
+            iteration += 1
+            output_filename = settings.OUTPUT_FILENAME % str(iteration)
+            with open(output_filename, 'wb') as output_file:
+                for resource in chunked_import_list:
+                    output_file.write(json.dumps(resource))
+                    output_file.write('\n')

@@ -7,7 +7,7 @@ import settings
 
 
 # settings
-json_filename = 'output/datim_indicators.json'
+json_filename = 'output/msp_pepfar_test8_20200617.json'
 api_url_root = 'https://api.staging.openconceptlab.org'
 ocl_api_token = settings.ocl_api_token
 do_local_import = False  # Instead of bulk import
@@ -35,4 +35,4 @@ else:  # Do bulk import
     import_request.raise_for_status()
     import_response = import_request.json()
     task_id = import_response['task']
-    print 'Bulk Import Task ID:\n%s\n' % task_id
+    print '\nImport Filename: %s\nBulk Import Task ID:\n%s\n' % (json_filename, task_id)

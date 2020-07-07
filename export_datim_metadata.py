@@ -9,6 +9,11 @@ import settings
 # DATIM DHIS2 export queries
 # NOTE: comment out to omit; key must match the standard resource name from DHIS2
 DATIM_EXPORTS = {
+    'indicators': {
+        'fileType': 'json',
+        'url': ('https://dev-de.datim.org/api/indicators.json?fields=*,dataSets[id,name],'
+                'indicatorType[id,name],indicatorGroups[id,name]&paging=false')
+    },
     'dataElements': {
         'fileType': 'json',
         'url': ('https://dev-de.datim.org/api/dataElements.json?fields=id,code,name,shortName,'
