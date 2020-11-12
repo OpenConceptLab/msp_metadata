@@ -1,21 +1,39 @@
 """
-Prepares DATIM metadata for import into OCL
+Prepares an OCL bulk import file for MER metadata
 
-TO DO ROUND 9 IMPORT:
-* Exclude COCs from Codelists based on the ZenDesk queries that are used (#742)
-* Revise reference indicator model to support PDH-specific codes and all variants (eg _POS, _NEG,
-  etc), likely through a simple tree structure (???)
-* Address overlap between DATIM & PDH data elements -- some DATIM DEs were replaced by PDH DDEs.
-  In Round 7 import, there were 127 data elements between PDH and DATIM with the same UIDs. (???)
-* Update to latest PDH Derived Data Elements extract (???)
-* Finalize addition of Reporting Frequency attribute from Reference Indicators to relevant
-  DATIM/PDH data elements (#736)
-* Some linkages appear not to be showing up in MSP or OCL -- this is possibly because they
-  were not added to the correct collection or because they were not generated (#719)
-* Data Element Groups: SIMS + EA (Expenditure Analysis) (???)
-* Include Mechanism name in DATIM indicator formulas with 3 UIDs (???)
+COMPLETED:
+* Retrieve & save DATIM codelists from SqlQuery API instead of dataset membership
+* Populate DE 'codelists' from codelist_references instead of DE datasets
+    * 1308:build_concept_from_datim_de
+    * 633:get_de_periods_from_codelist_collections
 
-ROUND 9 TICKETS: #719, #742, #736
+TODO:
+* Remove codelist_collections['extras']['dhis2_codelist'] before saving
+* Update how codelist references are generated:
+    * 798:msp.build_codelist_references -- this refers to COC IDs and new custom mapping IDs,
+      which the method is not yet able to validate
+* Ensure that the switch to custom mapping IDs is valid throughout the script
+
+
+1. Add missing reference indicator codes and mappings to the DATIM indicators
+2. Group data elements by MER, SIMS, EA, Other?
+3. Include # of derivation rules in report
+
+TOP PRIORITY FOR ROUND 9 IMPORT:
+Exclude COCs from Codelists based on the ZenDesk queries that are used to filter datasets (#742)
+Update to latest content:
+DATIM content was exported from DHIS2 on 2020-06-11 (data elements, datim indicators, COCs, dataset)
+PDH Derived Data Elements extract from 2020-01-05
+Codelists spreadsheet from 2020-06-16
+MER Reference Indicators spreadsheet from 2020-06-11
+ADDITIONAL ITEMS FOR CONSIDERATION: (for round 9 or other future imports)
+Implement hierarchical reference indicator model to support PDH-specific codes and all variants, eg. _POS, _NEG, etc. (See notes in #647)
+Implement Data Element Groups -- most DATIM DEs are SIMS or EA (Expenditure Analysis), but there are no filters or logical groups to work with SIMS and EA
+Ensure overlap of 127 data element UIDs between DATIM & PDH is modeled correctly in OCL. These are DATIM DEs that were replaced by PDH DDEs.
+Review the addition of Reporting Frequency attribute from Reference Indicators to relevant DATIM/PDH data elements and address any issues. This was included in Round 8 but needs to be reviewed.
+Include Mechanism name in DATIM indicator formulas with 3 UIDs
+Import Mechanisms
+Review handling of fiscal year between targets and results (#667)
 """
 import json
 import ocldev.oclresourcelist
@@ -40,8 +58,13 @@ sorted_ref_indicator_codes = msp.get_sorted_unique_indicator_codes(
 coc_concepts = msp.load_datim_coc_concepts(
     filename=settings.FILENAME_DATIM_COCS, org_id=settings.MSP_ORG_ID,
     source_id=settings.MSP_SOURCE_ID)
-codelist_collections = msp.load_codelist_collections(
-    filename=settings.FILENAME_DATIM_CODELISTS, org_id=settings.MSP_ORG_ID)
+
+# JP: Loading from file instead because no need to retrieve every time this is run
+# codelist_collections = msp.load_codelist_collections(
+#     filename=settings.FILENAME_DATIM_CODELISTS, org_id=settings.MSP_ORG_ID)
+codelist_collections = msp.load_codelist_collections_with_exports_from_file(
+    filename=settings.FILENAME_DATIM_CODELISTS_WITH_EXPORT)
+
 de_concepts = msp.load_datim_data_elements(
     filename=settings.FILENAME_DATIM_DATA_ELEMENTS, org_id=settings.MSP_ORG_ID,
     source_id=settings.MSP_SOURCE_ID, sorted_ref_indicator_codes=sorted_ref_indicator_codes,
@@ -55,20 +78,8 @@ pdh_dde_concepts = msp.load_pdh_dde_concepts(
     filename=settings.FILENAME_PDH, num_run_sequences=settings.PDH_NUM_RUN_SEQUENCES,
     org_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID,
     sorted_ref_indicator_codes=sorted_ref_indicator_codes,
-    ref_indicator_concepts=ref_indicator_concepts)
-
-# Summarize metadata loaded
-if settings.VERBOSITY:
-    msp.display_input_metadata_summary(
-        verbosity=settings.VERBOSITY,
-        input_periods=settings.MSP_INPUT_PERIODS,
-        ref_indicator_concepts=ref_indicator_concepts,
-        sorted_ref_indicator_codes=sorted_ref_indicator_codes,
-        coc_concepts=coc_concepts,
-        codelist_collections=codelist_collections,
-        de_concepts=de_concepts,
-        datim_indicator_concepts=datim_indicator_concepts,
-        pdh_dde_concepts=pdh_dde_concepts)
+    ref_indicator_concepts=ref_indicator_concepts,
+    pdh_rule_period_end_year=settings.PDH_RULE_PERIOD_END_YEAR)
 
 
 # GENERATE MAPPINGS & LINKAGES
@@ -78,7 +89,8 @@ if settings.VERBOSITY:
 #       indicator URLs as value
 # 4. map_de_to_coc -- Dictionary with DE URL as key and list of COC URLs as value
 # 5. map_pdh_dde_to_coc -- Dictionary with DDE URL as key and list of COC URLs as value
-# 6. map_codelist_to_de -- Dictionary with Codelist ID as key and list of DE URLs as value
+# 6. map_codelist_to_de_to_coc -- Dictionary with Codelist ID as top-level key, DE URL as
+#       2nd-level key, and list of COC URLs as value
 # 7. de_version_linkages - Dictionary with version-less DE root code as key, list of dicts
 #       describing linked DEs as value (url, DE code, version number, sort order)
 # 8. map_de_version_linkages - Dictionary with DE URL as key, list of replaced DE URLs as value
@@ -97,28 +109,15 @@ map_de_to_coc = msp.build_de_to_coc_maps(
     org_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID)
 map_pdh_dde_to_coc = msp.build_pdh_dde_to_coc_maps(
     pdh_dde_concepts=pdh_dde_concepts, coc_concepts=coc_concepts)
-map_codelist_to_de = msp.build_codelist_to_de_map(de_concepts=de_concepts)
+map_codelist_to_de_to_coc = msp.build_codelist_to_de_map(
+    codelist_collections=codelist_collections, de_concepts=de_concepts,
+    org_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID)
 de_version_linkages = msp.build_linkages_de_version(de_concepts=de_concepts)
 de_version_linkages.update(msp.build_linkages_dde_version(pdh_dde_concepts=pdh_dde_concepts))
 map_de_version_linkages = msp.build_maps_from_de_linkages(de_linkages=de_version_linkages)
 map_dde_source_linkages = msp.build_linkages_source_de(
     pdh_dde_concepts=pdh_dde_concepts, owner_id=settings.MSP_ORG_ID,
     source_id=settings.MSP_SOURCE_ID)
-
-# Summarize results of processing all data elements
-if settings.VERBOSITY:
-    msp.display_linkages_summary(
-        verbosity=settings.VERBOSITY,
-        map_ref_indicator_to_de=map_ref_indicator_to_de,
-        map_ref_indicator_to_pdh_dde=map_ref_indicator_to_pdh_dde,
-        map_ref_indicator_to_datim_indicator=map_ref_indicator_to_datim_indicator,
-        map_de_to_coc=map_de_to_coc,
-        map_pdh_dde_to_coc=map_pdh_dde_to_coc,
-        map_codelist_to_de=map_codelist_to_de,
-        codelist_collections=codelist_collections,
-        de_version_linkages=de_version_linkages,
-        map_de_version_linkages=map_de_version_linkages,
-        map_dde_source_linkages=map_dde_source_linkages)
 
 
 # GENERATE VALUE SET REFERENCES
@@ -128,12 +127,30 @@ if settings.VERBOSITY:
 ref_indicator_references = msp.build_ref_indicator_references(
     ref_indicator_concepts=ref_indicator_concepts, org_id=settings.MSP_ORG_ID)
 codelist_references = msp.build_codelist_references(
-    map_codelist_to_de=map_codelist_to_de, map_de_to_coc=map_de_to_coc, org_id=settings.MSP_ORG_ID,
+    map_codelist_to_de_to_coc=map_codelist_to_de_to_coc,
+    org_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID,
     codelist_collections=codelist_collections)
 
-# Display summary of the references generated
+
+# Summarize metadata loaded
 if settings.VERBOSITY:
-    msp.display_references_summary(
+    msp.display_input_metadata_summary(
+        verbosity=settings.VERBOSITY,
+        input_periods=settings.MSP_INPUT_PERIODS,
+        ref_indicator_concepts=ref_indicator_concepts,
+        sorted_ref_indicator_codes=sorted_ref_indicator_codes,
+        coc_concepts=coc_concepts,
+        codelist_collections=codelist_collections,
+        de_concepts=de_concepts,
+        map_codelist_to_de_to_coc=map_codelist_to_de_to_coc,
+        datim_indicator_concepts=datim_indicator_concepts,
+        pdh_dde_concepts=pdh_dde_concepts,
+        map_ref_indicator_to_de=map_ref_indicator_to_de,
+        map_ref_indicator_to_pdh_dde=map_ref_indicator_to_pdh_dde,
+        map_ref_indicator_to_datim_indicator=map_ref_indicator_to_datim_indicator,
+        map_de_to_coc=map_de_to_coc, map_pdh_dde_to_coc=map_pdh_dde_to_coc,
+        de_version_linkages=de_version_linkages, map_de_version_linkages=map_de_version_linkages,
+        map_dde_source_linkages=map_dde_source_linkages,
         ref_indicator_references=ref_indicator_references,
         codelist_references=codelist_references)
 
@@ -203,19 +220,25 @@ if settings.OUTPUT_OCL_FORMATTED_JSON:
     # 3.b. Mappings
     import_list.append(msp.build_ocl_mappings(
         map_dict=map_ref_indicator_to_de, map_type=msp.MSP_MAP_TYPE_REF_INDICATOR_TO_DE,
-        owner_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID))
+        owner_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID,
+        do_generate_mapping_id=True, id_format=msp.MSP_MAP_ID_FORMAT_REFIND_DE))
     import_list.append(msp.build_ocl_mappings(
         map_dict=map_ref_indicator_to_pdh_dde, map_type=msp.MSP_MAP_TYPE_REF_INDICATOR_TO_DE,
-        owner_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID))
+        owner_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID,
+        do_generate_mapping_id=True, id_format=msp.MSP_MAP_ID_FORMAT_REFIND_DE))
     import_list.append(msp.build_ocl_mappings(
-        map_dict=map_ref_indicator_to_datim_indicator, map_type=msp.MSP_MAP_TYPE_REF_INDICATOR_TO_DATIM_INDICATOR,
-        owner_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID))
+        map_dict=map_ref_indicator_to_datim_indicator,
+        map_type=msp.MSP_MAP_TYPE_REF_INDICATOR_TO_DATIM_INDICATOR,
+        owner_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID,
+        do_generate_mapping_id=True, id_format=msp.MSP_MAP_ID_FORMAT_REFIND_IND))
     import_list.append(msp.build_ocl_mappings(
         map_dict=map_de_to_coc, map_type=msp.MSP_MAP_TYPE_DE_TO_COC,
-        owner_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID))
+        owner_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID,
+        do_generate_mapping_id=True, id_format=msp.MSP_MAP_ID_FORMAT_DE_COC))
     import_list.append(msp.build_ocl_mappings(
         map_dict=map_pdh_dde_to_coc, map_type=msp.MSP_MAP_TYPE_DE_TO_COC,
-        owner_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID))
+        owner_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID,
+        do_generate_mapping_id=True, id_format=msp.MSP_MAP_ID_FORMAT_DE_COC))
 
     # 4. CODELIST REFERENCES
     import_list += codelist_references
@@ -261,9 +284,8 @@ if settings.OUTPUT_OCL_FORMATTED_JSON:
         for (key, count) in import_list.summarize(core_attr_key='type').items():
             print '    %s: %s' % (key, count)
 
-    # TODO: Dedup import list (maybe?)
-    # # 4. CLEANUP: De-duplicate import list without changing order & leaving 1st occurrence in place
-    # import_list_dedup = msp.dedup_list_of_dicts(import_list._resources)
+    # 4. CLEANUP: De-duplicate import list without changing order & leaving 1st occurrence in place
+    import_list_dedup = msp.dedup_list_of_dicts(import_list._resources)
 
     # Output import list
     if import_list:

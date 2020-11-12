@@ -14,17 +14,18 @@ datim_password = ''
 # 2 - Display detailed report
 # 3 - Display debug info
 # 4 - Display all info
-VERBOSITY = 0
+VERBOSITY = 4
 
 # Output settings
-OUTPUT_FILENAME = 'output/build_pepfar_test8_20200617_%s.json'
+OUTPUT_FILENAME = 'output/build_pepfar_test9_20201112_%s.json'
 IMPORT_LIST_CHUNK_SIZE = 20000
 
-# Set org/source ID, input periods, and map types
-MSP_ORG_ID = 'PEPFAR-Test8'
+# Set org/source ID, input periods
+MSP_ORG_ID = 'PEPFAR-Test9'
 MSP_SOURCE_ID = 'MER'
 MSP_INPUT_PERIODS = ['FY16', 'FY17', 'FY18', 'FY19', 'FY20']  # List of all input periods
 PDH_NUM_RUN_SEQUENCES = 3  # Number of run sequences for processing PDH derived DEs
+PDH_RULE_PERIOD_END_YEAR = '2020'  # Constant for processing PDH rule periods
 
 # Set what the script outputs
 OUTPUT_PERIODS = ['FY16', 'FY17', 'FY18', 'FY19', 'FY20']
@@ -59,6 +60,7 @@ FILENAME_DATIM_DATA_ELEMENTS = 'data/datim_dataElements_20200611.json'
 FILENAME_DATIM_COCS = 'data/datim_categoryOptionCombos_20200611.json'
 FILENAME_DATIM_INDICATORS = 'data/datim_indicators_20200611.json'
 FILENAME_DATIM_CODELISTS = 'data/codelists_RT_FY16_20_20200616.csv'
+FILENAME_DATIM_CODELISTS_WITH_EXPORT = 'data/codelist_collections_with_exports_FY16_20_20201106.json'
 FILENAME_MER_REFERENCE_INDICATORS = [
 	'data/mer_indicators_FY16_20200615.csv',
 	'data/mer_indicators_FY17_20200615.csv',
@@ -66,4 +68,4 @@ FILENAME_MER_REFERENCE_INDICATORS = [
 	'data/mer_indicators_FY19_20200611.csv',
 	'data/mer_indicators_FY20_20200611.csv'
 ]
-FILENAME_PDH = 'data/pdh_20200105.csv'
+FILENAME_PDH = 'data/pdh_derived_data_elements_20200820b.csv'
