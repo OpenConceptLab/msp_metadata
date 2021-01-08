@@ -42,7 +42,7 @@ for export_key in DATIM_EXPORTS:
     print '\n****', export_key, '\n', DATIM_EXPORTS[export_key]['url']
     r = requests.get(
         DATIM_EXPORTS[export_key]['url'],
-        auth=(settings.datim_username, settings.datim_password))
+        auth=(settings.DATIM_USERNAME, settings.DATIM_PASSWORD))
     r.raise_for_status()
     if '.json?' in DATIM_EXPORTS[export_key]['url']:
         results = r.json()

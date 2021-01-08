@@ -9,7 +9,7 @@ import settings
 # settings
 json_filename = 'output/msp_pepfar_test8_20200617.json'
 api_url_root = 'https://api.staging.openconceptlab.org'
-ocl_api_token = settings.ocl_api_token
+ocl_api_token = settings.OCL_API_TOKEN
 do_local_import = False  # Instead of bulk import
 
 # Local import settings -- only used if do_local_import == True

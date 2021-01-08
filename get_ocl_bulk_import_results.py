@@ -8,7 +8,7 @@ import settings
 # Settings
 results_filename = 'logs/import_results.json'
 api_url_root = 'https://api.staging.openconceptlab.org'
-ocl_api_token = settings.ocl_api_token
+ocl_api_token = settings.OCL_API_TOKEN
 
 # Bulk Import Task ID
 task_id = ''
