@@ -7,8 +7,10 @@ import msp
 
 
 # Load codelists from CSV and download/add the exports from ZenDesk exports to each
+print 'Loading codelists...'
 codelist_collections = msp.load_codelist_collections(
-    filename=settings.FILENAME_DATIM_CODELISTS, org_id=settings.MSP_ORG_ID)
+    filename=settings.FILENAME_DATIM_CODELISTS, org_id=settings.MSP_ORG_ID,
+    canonical_url=settings.CANONICAL_URL, verbosity=2)
 
 # Save codelists with their exports to file
 with open(settings.FILENAME_DATIM_CODELISTS_WITH_EXPORT, 'w') as output_file:

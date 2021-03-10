@@ -1,6 +1,6 @@
 """
 Common functionality used in the MSP ETL scripts used to prepare and import metadata from
-MER guidance, DATIM, IHUB, and related systems.
+MER guidance, DATIM, iHUB, and related systems.
 
 Update these for each update of MSP:
 1. Run get_codelist_collections_formatted_for_display to provide MSP with codelist definitions
@@ -31,7 +31,7 @@ MSP_MAP_ID_FORMAT_DE_COC = 'MAP_DE_COC_%s_%s'
 MSP_MAP_ID_FORMAT_REFIND_DE = 'MAP_REFIND_DE_%s_%s'
 MSP_MAP_ID_FORMAT_REFIND_IND = 'MAP_REFIND_IND_%s_%s'
 
-# Constants for IHUB source spreadsheet
+# Constants for iHUB source spreadsheet
 IHUB_COLUMN_INDICATOR = 'indicator'
 IHUB_COLUMN_SOURCE_KEY = 'source_srgt_key'
 IHUB_COLUMN_DISAGGREGATE = 'disaggregate'
@@ -100,6 +100,13 @@ DATIM_CODELIST_COLUMNS = [
 # Constants for MSP collections -- %s is replaced by period (eg FY19)
 COLLECTION_NAME_MER_REFERENCE_INDICATORS = 'MER_REFERENCE_INDICATORS_%s'
 
+# Support type constants
+SUPPORT_TYPE_CODES = {
+    'TA': 'Technical Assistance',
+    'DSD': 'Direct Service Delivery',
+    'CS': 'Central Support'
+}
+
 # Constants for data element custom attributes
 ATTR_APPLICABLE_PERIODS = 'Applicable Periods'
 ATTR_PERIOD = 'Period'
@@ -166,19 +173,20 @@ def display_input_metadata_summary(verbosity=1, input_periods=None, ref_indicato
                     print '        Mapped DATIM data elements: %s' % (
                         len(map_ref_indicator_to_de[ref_indicator_concept['__url']]))
                 if ref_indicator_concept['__url'] in map_ref_indicator_to_ihub_dde:
-                    print '        Mapped IHUB derived data elements: %s' % (
+                    print '        Mapped iHUB derived data elements: %s' % (
                         len(map_ref_indicator_to_ihub_dde[ref_indicator_concept['__url']]))
                 if ref_indicator_concept['__url'] in map_ref_indicator_to_datim_indicator:
                     print '        Mapped DATIM indicators: %s' % (
                         len(map_ref_indicator_to_datim_indicator[ref_indicator_concept['__url']]))
         print '    Breakdown by Period:'
-        for (period, count) in ref_indicator_concepts.summarize(custom_attr_key=ATTR_PERIOD).items():
+        for (period, count) in ref_indicator_concepts.summarize(
+                custom_attr_key=ATTR_PERIOD).items():
             print '      %s: %s' % (period, count)
         print '    Summary of Reference Indicator Mappings:'
         print '      Mappings to DATIM Data Elements (DE): ',
         print '%s reference indicators with %s unique DE mappings' % (
             get_dict_child_counts(map_ref_indicator_to_de))
-        print '      Mappings to IHUB Derived Data Elements (DDE): ',
+        print '      Mappings to iHUB Derived Data Elements (DDE): ',
         print '%s reference indicators with %s unique DDE mappings' % (
             get_dict_child_counts(map_ref_indicator_to_ihub_dde))
         print '      Mappings to DATIM Indicators: ',
@@ -224,7 +232,7 @@ def display_input_metadata_summary(verbosity=1, input_periods=None, ref_indicato
             print '      %s: %s' % (period, count)
         display_resource_list_summaries(de_concepts, de_concepts_summary_dict)
 
-    # IHUB derived data element concepts
+    # iHUB derived data element concepts
     if ihub_dde_concepts:
         ihub_dde_concepts_summary_dict = {
             ATTR_RESULT_TARGET: 'Result/Target',
@@ -233,15 +241,16 @@ def display_input_metadata_summary(verbosity=1, input_periods=None, ref_indicato
             ATTR_PEPFAR_SUPPORT_TYPE: 'PEPFAR Support Type',
             ATTR_REPORTING_FREQUENCY: 'Reporting Frequency'
         }
-        print '  IHUB Derived Data Element (All):', len(ihub_dde_concepts)
+        print '  iHUB Derived Data Element (All):', len(ihub_dde_concepts)
         print '    Breakdown by period (via derivation rules):'
-        for (period, count) in summarize_applicable_periods_from_concepts(ihub_dde_concepts).items():
+        for (period, count) in summarize_applicable_periods_from_concepts(
+                ihub_dde_concepts).items():
             print '      %s: %s' % (period, count)
         display_resource_list_summaries(ihub_dde_concepts, ihub_dde_concepts_summary_dict)
 
     # Summary for DE version linkages
     print '\nRESULTS OF GENERATING LINKAGES BETWEEN DATA ELEMENTS:'
-    print '  Data Element Version Links (DATIM and IHUB):'
+    print '  Data Element Version Links (DATIM and iHUB):'
     print '    %s DEs replaced %s DEs' % get_dict_child_counts(map_de_version_linkages)
     if verbosity >= 2:
         for de_code in de_version_linkages:
@@ -251,7 +260,7 @@ def display_input_metadata_summary(verbosity=1, input_periods=None, ref_indicato
                     de_version['sort_order'], de_version['code'], de_version['url'])
 
     # Summary for DE source-derivation linkages
-    print '\n  IHUB Data Element Source-Derivation Linkages:'
+    print '\n  iHUB Data Element Source-Derivation Linkages:'
     print '    %s derived data elements linked to %s source data elements' % get_dict_child_counts(
         map_dde_source_linkages)
     print '    NOTE: Source-derivation linkages are defined between data elements only, not COCs'
@@ -263,7 +272,7 @@ def display_input_metadata_summary(verbosity=1, input_periods=None, ref_indicato
             print '    %s DATIM data elements with %s unique COC maps' % get_dict_child_counts(
                 map_de_to_coc)
         if map_ihub_dde_to_coc:
-            print '    %s IHUB DDEs with %s unique COC maps' % get_dict_child_counts(
+            print '    %s iHUB DDEs with %s unique COC maps' % get_dict_child_counts(
                 map_ihub_dde_to_coc)
 
     # DATIM indicator concepts
@@ -275,12 +284,13 @@ def display_input_metadata_summary(verbosity=1, input_periods=None, ref_indicato
         }
         print '  DATIM Indicators (All):', len(datim_indicator_concepts)
         print '    Breakdown by period (via keywords in indicator names):'
-        for (period, count) in summarize_applicable_periods_from_concepts(datim_indicator_concepts).items():
+        for (period, count) in summarize_applicable_periods_from_concepts(
+                datim_indicator_concepts).items():
             print '      %s: %s' % (period, count)
         display_resource_list_summaries(
             datim_indicator_concepts, datim_indicator_concepts_summary_dict)
 
-    # Display list of overlapping IDs between IHUB and DATIM data elements
+    # Display list of overlapping IDs between iHUB and DATIM data elements
     if ihub_dde_concepts:
         overlapping_de_concepts = {}
         for dde_concept in ihub_dde_concepts:
@@ -291,14 +301,15 @@ def display_input_metadata_summary(verbosity=1, input_periods=None, ref_indicato
                     'datim': de_concept
                 }
         if overlapping_de_concepts:
-            print '  Overlapping DATIM/IHUB Data Elements: %s' % len(overlapping_de_concepts)
-            for overlapping_de_concept_id in overlapping_de_concepts.keys():
-                print '    [%s]\n      DATIM: %s -- %s\n      IHUB: %s -- %s' % (
+            print '  Overlapping DATIM/iHUB Data Elements: %s' % len(overlapping_de_concepts)
+            for overlapping_de_concept_id in overlapping_de_concepts:
+                overlapping_concept = overlapping_de_concepts[overlapping_de_concept_id]
+                print '    [%s]\n      DATIM: %s -- %s\n      iHUB: %s -- %s' % (
                     overlapping_de_concept_id,
-                    overlapping_de_concepts[overlapping_de_concept_id]['datim']['names'][0]['name'],
-                    overlapping_de_concepts[overlapping_de_concept_id]['datim']['extras'].get(ATTR_APPLICABLE_PERIODS),
-                    overlapping_de_concepts[overlapping_de_concept_id]['ihub']['names'][0]['name'],
-                    overlapping_de_concepts[overlapping_de_concept_id]['ihub']['extras'].get(ATTR_APPLICABLE_PERIODS))
+                    overlapping_concept['datim']['names'][0]['name'],
+                    overlapping_concept['datim']['extras'].get(ATTR_APPLICABLE_PERIODS),
+                    overlapping_concept['ihub']['names'][0]['name'],
+                    overlapping_concept['ihub']['extras'].get(ATTR_APPLICABLE_PERIODS))
 
 
 def summarize_import_list(import_list):
@@ -309,14 +320,15 @@ def summarize_import_list(import_list):
         print '    %s: %s' % (key, count)
         if key == 'Concept':
             concepts = import_list.get_resources(core_attrs={'type': 'Concept'})
-            for (subresource_key, subresource_count) in concepts.summarize(core_attr_key='concept_class').items():
+            for (subresource_key, subresource_count) in concepts.summarize(
+                    core_attr_key='concept_class').items():
                 print '      %s: %s' % (subresource_key, subresource_count)
                 if subresource_key == 'Data Element':
-                    for (k, v) in concepts.get_resources(core_attrs={'concept_class': 'Data Element'}).summarize(custom_attr_key='source').items():
-                        print '        %s: %s' % (k, v)
+                    for (concept_key, value) in concepts.get_resources(core_attrs={'concept_class': 'Data Element'}).summarize(custom_attr_key='source').items():
+                        print '        %s: %s' % (concept_key, value)
                 elif subresource_key == 'Reference Indicator':
-                    for (k, v) in concepts.get_resources(core_attrs={'concept_class': 'Reference Indicator'}).summarize(custom_attr_key='Period').items():
-                        print '        %s: %s' % (k, v)
+                    for (concept_key, value) in concepts.get_resources(core_attrs={'concept_class': 'Reference Indicator'}).summarize(custom_attr_key='Period').items():
+                        print '        %s: %s' % (concept_key, value)
         elif key == 'Mapping':
             for (subresource_key, subresource_count) in import_list.get_resources(core_attrs={'type': 'Mapping'}).summarize(core_attr_key='map_type').items():
                 print '      %s: %s' % (subresource_key, subresource_count)
@@ -360,18 +372,19 @@ def get_new_org_json(org_id=''):
     }
 
 
-def get_primary_source(org_id, source_id):
+def get_primary_source(org_id, source_id, canonical_url):
     """ Returns OCL-formatted JSON for the PEPFAR MER source """
     return get_new_repo_json(
         owner_id=org_id, repo_id=source_id, name="MER Source",
-        full_name="DATIM Monitoring, Evaluation & Results Metadata")
+        full_name="DATIM Monitoring, Evaluation & Results Metadata",
+        canonical_url="%s/CodeSystem/MER" % canonical_url)
 
 
 def get_new_repo_json(owner_type='Organization', owner_id='', repo_type='Source', repo_id='',
                       name='', full_name='', repo_sub_type='Dictionary', default_locale='en',
-                      public_access='View', supported_locales='en'):
+                      public_access='View', supported_locales='en', canonical_url=''):
     """ Returns OCL-formatted JSON for a source """
-    return {
+    source = {
         "name": name,
         "default_locale": default_locale,
         "short_code": repo_id,
@@ -382,8 +395,11 @@ def get_new_repo_json(owner_type='Organization', owner_id='', repo_type='Source'
         "owner_type": owner_type,
         "type": repo_type,
         "id": repo_id,
-        "supported_locales": supported_locales,
+        "supported_locales": supported_locales
     }
+    if canonical_url:
+        source['canonical_url'] = canonical_url
+    return source
 
 
 def load_datim_data_elements(filename='', org_id='', source_id='',
@@ -436,10 +452,11 @@ def load_codelist_collections_with_exports_from_file(filename='', org_id=''):
     return resources
 
 
-def load_codelist_collections(filename='', org_id=''):
+def load_codelist_collections(filename='', org_id='', canonical_url='', verbosity=0):
     """
     Load and return codelist_collections as OCL-formatted JSON collections.
-    This method retrieves the full codelist from 
+    This method retrieves all of the full codelist from DATIM directly, which takes
+    a long time to process.
     """
 
     # Load the codelist definitions into a resource list
@@ -451,7 +468,10 @@ def load_codelist_collections(filename='', org_id=''):
             if not row['resource_type']:
                 continue
             row['id'] = format_identifier(unformatted_id=row['id'])
+            if verbosity:
+                print 'Retrieving codelist: %s' % row['id']
             row['owner_id'] = org_id
+            row['canonical_url'] = "%s/ValueSet/%s" % (canonical_url, row['id'])
             dhis2_codelist_url = row.pop('ZenDesk: HTML Link').replace('.html+css', '.json')
             row['attr:dhis2_codelist_url'] = dhis2_codelist_url
 
@@ -514,9 +534,9 @@ def load_ihub_dde_concepts(filename='', num_run_sequences=3, org_id='',
                            source_id='', sorted_ref_indicator_codes=None,
                            ref_indicator_concepts=None,
                            ihub_rule_period_end_year=2020):
-    """ Load IHUB Derived Data Element extract and return as OCL-formatted JSON concepts """
+    """ Load iHUB Derived Data Element extract and return as OCL-formatted JSON concepts """
 
-    # Load raw IHUB extract
+    # Load raw iHUB extract
     ihub_raw = []
     with open(filename) as ifile:
         reader = csv.DictReader(ifile)
@@ -547,36 +567,32 @@ def get_ihub_dde_numerator_or_denominator(de_name):
 def get_ihub_dde_support_type(de_name):
     """
     Returns fully specified PEPFAR support type (eg 'Technical Assistance' or 'Direct Service
-    Delivery') based on the presence of one of the acronyms in a IHUB derived data element name.
+    Delivery') based on the presence of one of the acronyms in a iHUB derived data element name.
     """
     de_modifiers = get_data_element_name_modifiers(de_name)
-    if ', TA' in de_modifiers:
-        return 'Technical Assistance'
-    elif ', DSD' in de_modifiers:
-        return 'Direct Service Delivery'
+    for support_type_code in SUPPORT_TYPE_CODES:
+        if ', %s' % support_type_code in de_modifiers:
+            return SUPPORT_TYPE_CODES[support_type_code]
+    return ''
+
+
+def get_data_element_support_type(de_code=''):
+    """
+    Returns fully specified PEPFAR support type (eg 'Technical Assistance' or 'Direct Service
+    Delivery') based on the presence of one of the acronyms in a data element code.
+    """
+    for support_type_code in SUPPORT_TYPE_CODES:
+        if '_%s_' % support_type_code in de_code:
+            return SUPPORT_TYPE_CODES[support_type_code]
     return ''
 
 
 def get_ihub_dde_version(de_name):
-    """
-    Returns data element version number if ' v#:' is present in the data element name.
-    """
-    if ' v2:' in de_name:
-        return 'v2'
-    elif ' v3:' in de_name:
-        return 'v3'
-    elif ' v4:' in de_name:
-        return 'v4'
-    elif ' v5:' in de_name:
-        return 'v5'
-    elif ' v6:' in de_name:
-        return 'v6'
-    elif ' v7:' in de_name:
-        return 'v7'
-    elif ' v8:' in de_name:
-        return 'v8'
-    elif ' v9:' in de_name:
-        return 'v9'
+    """ Returns data element version number if ' v#:' is present in the data element name. """
+    version_codes = ['v2', 'v3', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9']
+    for version_code in version_codes:
+        if ' %s:' % version_code in de_name:
+            return version_code
     return ''
 
 
@@ -600,18 +616,6 @@ def get_data_element_numerator_or_denominator(de_code=''):
     return ''
 
 
-def get_data_element_support_type(de_code=''):
-    """
-    Returns fully specified PEPFAR support type (eg 'Technical Assistance' or 'Direct Service
-    Delivery') based on the presence of one of the acronyms in a DATIM data element code.
-    """
-    if '_TA_' in de_code:
-        return 'Technical Assistance'
-    elif '_DSD_' in de_code:
-        return 'Direct Service Delivery'
-    return ''
-
-
 def get_data_element_result_or_target(de_code=''):
     """ Returns 'Target' if the text is in the data element code, otherwise 'Result' """
     if 'target' in de_code.lower():
@@ -619,24 +623,31 @@ def get_data_element_result_or_target(de_code=''):
     return 'Result'
 
 
-def lookup_indicator_code(de_name='', de_code='', de_applicable_periods=None,
-                          sorted_ref_indicator_codes=None, ref_indicator_concepts=None):
+def lookup_reference_indicator_code(resource_name='', resource_code='',
+                                    resource_applicable_periods=None,
+                                    sorted_ref_indicator_codes=None, ref_indicator_concepts=None):
     """
-    Returns an indicator code that matches the prefix of the data element code.
-    eg. TX_CURR would be returned for TX_CURR_N_DSD_Age_Sex. sorted_ref_indicator_codes must be a
-    list of indicator codes sorted by string length in descending order.
+    Returns a reference indicator code that matches the resource code or name.
+    A ref indicator code is matched to the prefix of the resource name or code
+    (eg. "TX_CURR_N_DSD_Age_Sex" is a match for "TX_CURR") or embedded in the name surrounded by
+    whitespace (eg. "FY19 Results TX_ML Patient Died" is a match for "TX_ML"). If
+    "de_applicable_periods" is provided, a matching reference indicator must also be applicable
+    for at least on of the same periods. sorted_ref_indicator_codes must be a list of reference
+    indicator codes sorted by string length in descending order.
     """
     for ref_indicator_code in sorted_ref_indicator_codes:
-        if (de_code[:len(ref_indicator_code)] == ref_indicator_code or
-                de_name[:len(ref_indicator_code)] == ref_indicator_code):
-            if de_applicable_periods:
-                for period in de_applicable_periods[::-1]:
+        if (resource_code[:len(ref_indicator_code)] == ref_indicator_code or
+                resource_name[:len(ref_indicator_code)] == ref_indicator_code or
+                ' %s ' % (ref_indicator_code) in resource_name):
+            if resource_applicable_periods:
+                for period in resource_applicable_periods[::-1]:
                     ref_indicator_concept = ref_indicator_concepts.get_resource(
                         core_attrs={'id': ref_indicator_code}, custom_attrs={ATTR_PERIOD: period})
                     if ref_indicator_concept:
                         return ref_indicator_code
             else:
                 return ref_indicator_code
+
     return ''
 
 
@@ -695,7 +706,7 @@ def get_concepts_filtered_by_period(concepts=None, period=None):
     Returns a list of concepts filtered by ATTR_PERIOD or ATTR_APPLICABLE_PERIODS
     custom attributes. Period filter may be a single period (eg 'FY18') or
     a list of periods (eg ['FY18', 'FY19']). Works with ref_indicator_concepts and data
-    elements for both DATIM and IHUB.
+    elements for both DATIM and iHUB.
     """
 
     # Get period filter into the right format
@@ -793,7 +804,7 @@ def build_ocl_mappings(map_dict=None, filtered_from_concepts=None,
     defined in map_dict. If filtered_from_concepts is provided, then maps are
     omitted if the from_concept is not in the filtered_from_concepts list. This
     method is designed to work with mappings between ref_indicator_concepts and data elements,
-    and between data elements and COCs for DATIM and IHUB.
+    and between data elements and COCs for DATIM and iHUB.
     """
     output_mappings = []
     for from_concept_url in map_dict:
@@ -863,9 +874,9 @@ def get_mapped_concept_references(from_concepts=None, from_concept_urls=None, ma
                                   include_explicit_mapping_reference=False,
                                   mapping_id_format=''):
     """
-    Returns a list of references for the specified list of from concepts and, optionally, their
+    Returns a list of references for the specified list of from-concepts and, optionally, their
     mapped to concepts. Supports mappings for ref_indicator_concepts to data elements/DATIM
-    indicators, and data elements to COCs for both DATIM and IHUB. Must provide either
+    indicators, and data elements to COCs for both DATIM and iHUB. Must provide either
     from_concepts or from_concept_urls.
     """
     output_references = []
@@ -972,7 +983,7 @@ def get_mapped_concept_references_by_period(from_concepts=None, map_dict=None,
     concepts as value. If include_to_concept_refs is True, the "to concepts" that each "from
     concept" points to are also included. If include_all_period is True, a period with value
     of '*' is added that includes all passed concepts regardless of period. Compatible with
-    ref_indicator_concepts mapped to both DATIM and IHUB data elements and data elements
+    ref_indicator_concepts mapped to both DATIM and iHUB data elements and data elements
     mapped to COCs.
     """
     output_references = {}
@@ -998,8 +1009,8 @@ def build_mer_indicator_references(ref_indicator_concepts=None,
                                    include_to_concept_refs=False, include_all_period=False):
     """
     Returns a dictionary with period as key, list of OCL-formatted references
-    for all passed ref_indicator_concepts as value. Combines maps from ref_indicator_concepts to both
-    DATIM and IHUB data elements. If include_all_period is True, a period with
+    for all passed ref_indicator_concepts as value. Combines maps from ref_indicator_concepts
+    to both DATIM and iHUB data elements. If include_all_period is True, a period with
     value of '*' is added that spans all periods (and resources with no period).
     """
     combined_indicator_maps = map_indicator_to_de.copy()
@@ -1020,7 +1031,7 @@ def build_mer_references(de_concepts=None, map_de_to_coc=None,
                          include_all_period=False):
     """
     Returns dictionary with period as key, list of OCL-formatted references
-    for all specified data elements as value. Combines all DATIM and IHUB data
+    for all specified data elements as value. Combines all DATIM and iHUB data
     elements and their maps. If include_all_period is True, a period with
     value of '*' is added that includes all passed data elements.
     """
@@ -1031,9 +1042,9 @@ def build_mer_references(de_concepts=None, map_de_to_coc=None,
     combined_de_to_coc_maps = map_de_to_coc.copy()
     combined_de_to_coc_maps.update(map_ihub_dde_to_coc)
 
-    # TODO: There's an unexpected overlap of 127 data elements between IHUB and
-    # DATIM DEs, which means that some DATIM DEs are referenced in a run_sequence
-    # but not marked as sourced from DATIM
+    # NOTE: There is an overlap between data elements in iHUB and DATIM, because
+    # some DATIM DEs were replaced by derived DEs. This means that some DATIM DEs are
+    # referenced in an iHUB run_sequence but are not marked as sourced from DATIM.
     # print '%d + %d = %d' % (len(de_concepts), len(ihub_dde_concepts), len(combined_de_concepts))
     # print '%d + %d = %d' % (
     #     len(map_de_to_coc), len(map_ihub_dde_to_coc), len(combined_de_to_coc_maps))
@@ -1236,9 +1247,9 @@ def build_concept_from_datim_indicator(indicator_raw, org_id='', source_id='',
     }
 
     # Determine mapped indicator code
-    ref_indicator_code = lookup_indicator_code(
-        de_name=indicator_raw['name'], de_code=indicator_raw['shortName'],
-        de_applicable_periods=indicator_periods,
+    ref_indicator_code = lookup_reference_indicator_code(
+        resource_name=indicator_raw['name'], resource_code=indicator_raw['shortName'],
+        resource_applicable_periods=indicator_periods,
         sorted_ref_indicator_codes=sorted_ref_indicator_codes,
         ref_indicator_concepts=ref_indicator_concepts)
 
@@ -1417,7 +1428,7 @@ def build_concept_from_datim_de(de_raw, org_id, source_id, sorted_ref_indicator_
     de_numerator_or_denominator = get_data_element_numerator_or_denominator(de_code=de_code)
     de_version = get_data_element_version(de_code=de_code)  # v2, v3, ...
     de_code_root = get_data_element_root(de_code=de_code)  # HTS_TST_AgeSex
-    de_support_type = get_data_element_support_type(de_code=de_code)  # DSD, TA, ...
+    de_support_type = get_data_element_support_type(de_code=de_code)  # DSD, TA, CS, ...
 
     # Build the OCL formatted concept
     de_concept = {
@@ -1481,10 +1492,11 @@ def build_concept_from_datim_de(de_raw, org_id, source_id, sorted_ref_indicator_
     de_applicable_periods = get_de_periods_from_codelist_collections(
         de_codelists=de_codelists, codelist_collections=codelist_collections)
 
-    # Determine mapped indicator code
-    de_indicator_code = lookup_indicator_code(
-        de_name=de_raw['name'], de_code=de_raw.get('code', ''),
-        de_applicable_periods=de_applicable_periods,
+    # Determine mapped reference indicator code
+    de_indicator_code = lookup_reference_indicator_code(
+        resource_name=de_raw['name'],
+        resource_code=de_raw.get('code', ''),
+        resource_applicable_periods=de_applicable_periods,
         sorted_ref_indicator_codes=sorted_ref_indicator_codes,
         ref_indicator_concepts=ref_indicator_concepts)
 
@@ -1658,7 +1670,7 @@ def build_maps_from_de_linkages(de_linkages=None):
 
 def build_linkages_source_de(ihub_dde_concepts=None, owner_id='', source_id=''):
     """
-    Return a dictionary representing linkages between IHUB derived data elements and their
+    Return a dictionary representing linkages between iHUB derived data elements and their
     source data elements. The keys are the derived data element URLs, and values are lists of
     source data element URLs.
     :param ihub_dde_concepts:
@@ -1682,7 +1694,7 @@ def build_ref_indicator_to_child_resource_maps(child_concepts=None, sorted_ref_i
                                                org_id='', source_id=''):
     """
     Return dictionary with reference indicator URL as key and list of child concept URLs as value.
-    Compatible with DATIM data elements, IHUB derived data elements, DATIM indicators, or any other
+    Compatible with DATIM data elements, iHUB derived data elements, DATIM indicators, or any other
     list of resources with an 'indicator' custom attribute specifying the mapped reference indicator
     code and a '__url' core attribute. Child resources that with an unrecognized or missing
     reference indicator code are omitted.
@@ -1739,7 +1751,7 @@ def build_codelist_to_de_map(codelist_collections, de_concepts, org_id, source_i
 
 def get_ihub_rule_applicable_periods(ihub_row, ihub_rule_period_end_year):
     """
-    Return a list of strings representing the period of validity for a IHUB derived data element.
+    Return a list of strings representing the period of validity for a iHUB derived data element.
     For example: ["FY18", "FY19"]
 
     The first target period or quarter period that the rule began.
@@ -1764,13 +1776,13 @@ def parse_ihub_rule_period(ihub_rule_period):
     set of ("YYYY", "QQ").
     """
     if len(ihub_rule_period) != 8:
-        raise Exception('Invalid IHUB rule period: %s' % str(ihub_rule_period))
+        raise Exception('Invalid iHUB rule period: %s' % str(ihub_rule_period))
     return ihub_rule_period[:4], ihub_rule_period[4:6]
 
 
 def get_data_element_name_modifiers(de_name):
     """
-    Extract the modifier portion of a IHUB derived data element name.
+    Extract the modifier portion of a iHUB derived data element name.
     For example, 'D, DSD' would be returned this name:
     'CXCA_SCRN (D, DSD) TARGET: Receiving ART'
     """
@@ -1785,10 +1797,10 @@ def build_all_ihub_dde_concepts(ihub_raw, num_run_sequences=3, org_id='', source
                                 ihub_rule_period_end_year=2020):
     """
     Returns dictionary with unique DDE URL as key and DDE concept as value.
-    Iterates thru IHUB rows once per run sequence. The first run sequence relies
+    Iterates thru iHUB rows once per run sequence. The first run sequence relies
     only on DATIM data elements, whereas subsequent run sequences rely on data
     elements derived in a previous run sequence. Run sequences are defined
-    explicitly in the IHUB source data.
+    explicitly in the iHUB source data.
     """
     ihub_dde_concepts = {}
     for i in range(num_run_sequences):
@@ -1799,7 +1811,7 @@ def build_all_ihub_dde_concepts(ihub_raw, num_run_sequences=3, org_id='', source
                     ihub_row[IHUB_COLUMN_RUN_SEQUENCE] != current_run_sequence_str):
                 continue
 
-            # Build the IHUB derived data element (DDE) concept
+            # Build the iHUB derived data element (DDE) concept
             dde_concept_url = '/orgs/%s/sources/%s/concepts/%s/' % (
                 org_id, source_id, ihub_row[IHUB_COLUMN_DERIVED_DATA_ELEMENT_UID])
             if dde_concept_url not in ihub_dde_concepts:
@@ -1831,7 +1843,7 @@ def build_all_ihub_dde_concepts(ihub_raw, num_run_sequences=3, org_id='', source
 
 def build_concept_from_ihub_dde(ihub_row, org_id, source_id, sorted_ref_indicator_codes,
                                 ref_indicator_concepts, ihub_rule_period_end_year):
-    """ Return an OCL-formatted concept for the specified IHUB derived data element """
+    """ Return an OCL-formatted concept for the specified iHUB derived data element """
     de_applicable_periods = get_ihub_rule_applicable_periods(ihub_row, ihub_rule_period_end_year)
     de_result_or_target = ihub_row[IHUB_COLUMN_RESULT_TARGET].lower().capitalize()
     dde_concept = {
@@ -1846,7 +1858,7 @@ def build_concept_from_ihub_dde(ihub_row, org_id, source_id, sorted_ref_indicato
         'external_id': ihub_row[IHUB_COLUMN_DERIVED_DATA_ELEMENT_UID],
         'descriptions': None,
         'extras': {
-            'source': 'IHUB',
+            'source': 'iHUB',
             ATTR_RESULT_TARGET: de_result_or_target,
             'ihub_indicator_code': ihub_row.get(IHUB_COLUMN_INDICATOR, ''),
             'disaggregate': ihub_row[IHUB_COLUMN_DISAGGREGATE],
@@ -1868,10 +1880,10 @@ def build_concept_from_ihub_dde(ihub_row, org_id, source_id, sorted_ref_indicato
         ]
     }
 
-    # Determine mapped indicator code
-    dde_standard_indicator_code = lookup_indicator_code(
-        de_name=ihub_row.get(IHUB_COLUMN_INDICATOR, ''),
-        de_applicable_periods=de_applicable_periods,
+    # Determine mapped reference indicator code
+    dde_standard_indicator_code = lookup_reference_indicator_code(
+        resource_name=ihub_row.get(IHUB_COLUMN_INDICATOR, ''),
+        resource_applicable_periods=de_applicable_periods,
         sorted_ref_indicator_codes=sorted_ref_indicator_codes,
         ref_indicator_concepts=ref_indicator_concepts)
 
@@ -1920,7 +1932,7 @@ def build_ihub_dde_to_coc_maps(ihub_dde_concepts, coc_concepts=None):
         for coc_url in ihub_dde_concept['__cocs']:
             coc_concept = coc_concepts.get_resource_by_url(coc_url)
             if not coc_concept:
-                err_msg = 'Houston, we have a problem! COC for derived data element not found:' % coc_url
+                err_msg = 'ERROR: COC for derived data element not found:' % coc_url
                 raise Exception(err_msg)
             if coc_url not in map_ihub_dde_to_coc[ihub_dde_concept['__url']]:
                 map_ihub_dde_to_coc[ihub_dde_concept['__url']].append(coc_url)

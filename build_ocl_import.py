@@ -2,26 +2,27 @@
 Prepares an OCL bulk import file for MER metadata
 
 COMPLETED FOR ROUND 10:
-* Replaced all occurences of PDH with IHUB
-* Modified settings.py to include FY21
-* Removed chunking of bulk import file now that oclapi2 can handle large bulk imports
-* Applied MSP_ORG_ID to codelist file
-* Update to latest content:
+* Updated to MER v2.5 / FY21 content:
     * FY21 MER v2.5 Reference Indicators spreadsheet
     * FY21 Codelists spreadsheet
     * DATIM metadata exports retreived 2021-01-06 (DEs, indicators, COCs, dataset)
-    * IHUB Derived Data Elements extract from 2021-01-08
-
-TODO FOR ROUND 10:
-* Remove codelist_collections['extras']['dhis2_codelist'] before saving
-* Update how codelist references are generated:
-    * 798:msp.build_codelist_references -- this refers to COC IDs and new custom mapping IDs,
-      which the method is not yet able to validate
-* Add missing reference indicator codes and mappings to the DATIM indicators
-* Include # of derivation rules in report
-* Review the addition of Reporting Frequency attribute from Reference Indicators to relevant
-  DATIM/IHUB DEs and address any issues. This was included in Rnd8 but needs to be reviewed.
-* Include Mechanism name in DATIM indicator formulas with 3 UIDs
+    * iHUB Derived Data Elements extract from 2021-02-18
+    * Modified settings.py for FY21
+* Replaced all occurences of PDH with iHUB
+* Applied MSP_ORG_ID to codelist file so that this no longer has to be updated manually
+* Added canonical URLs to MER CodeSystem, Reference Indicator Value Sets, and all DATIM Codelists
+* Modified rules for generating links between a ref indicator and its corresponding data elements
+  and DATIM indicators (some ref indicator codes are in the middle of resource names, not beginning)
+* Generated new "Central Support" PEPFAR Support Type attr for applicable DEs (same as DSD/TA)
+* Removed unnecessary codelist_collections['extras']['dhis2_codelist'] attribute before saving
+  (this attribute is only used during processing)
+* Generated round 10 bulk import script and validated
+* Generated ref indicator collection versions at the end of processing each period instead of at
+  the end (this fixed a bug where a collection sometimes returned a newer version of a concept)
+* ETL script processing updates:
+    * Removed chunking of bulk import file now that oclapi2 can handle large bulk imports
+    * Improved log summary of OCL resource types in the final import script to simplify validation
+    * Updated to latest ocldev package release
 """
 import datetime
 import json
@@ -38,7 +39,7 @@ import msp
 # 4. codelist_collections -- OclJsonResourceList of FY16-20 Codelist Collections
 # 5. de_concepts -- OclJsonResourceList of DATIM Data Element (DE) concepts
 # 6. datim_indicator_concepts -- OclJsonResourceList DATIM Indicator concepts
-# 7. ihub_dde_concepts -- OclJsonResourceList of IHUB Derived Data Element (DDE) concepts
+# 7. ihub_dde_concepts -- OclJsonResourceList of iHUB Derived Data Element (DDE) concepts
 ref_indicator_concepts = msp.load_ref_indicator_concepts(
     filenames=settings.FILENAME_MER_REFERENCE_INDICATORS, org_id=settings.MSP_ORG_ID,
     source_id=settings.MSP_SOURCE_ID)
@@ -49,6 +50,7 @@ coc_concepts = msp.load_datim_coc_concepts(
     source_id=settings.MSP_SOURCE_ID)
 
 # JP: Loading from file instead because no need to retrieve every time this is run
+#     Use save_codelists_to_file.py to refresh
 # codelist_collections = msp.load_codelist_collections(
 #     filename=settings.FILENAME_DATIM_CODELISTS, org_id=settings.MSP_ORG_ID)
 codelist_collections = msp.load_codelist_collections_with_exports_from_file(
@@ -146,57 +148,71 @@ if settings.VERBOSITY:
 
 
 # OUTPUT OCL-FORMATTED JSON
-#  1. ALL REPOSITORIES
+#  1. Org, Source and Codelist Collections
 #      a. Primary Org and Source (eg /orgs/PEPFAR/sources/MER/)
 #      b. Codelist collections
-#      c. Reference indicator collections for each period (eg MER_Reference_Indicators_FY18)
-#  2. FOR EACH PERIOD...
-#      a. Reference indicator concepts for primary source for current period
-#      b. Reference indicator period references for current period
+#  2. Reference Indicators by period...
+#      a. Reference indicator collections for each period (eg MER_Reference_Indicators_FY18)
+#      b. Reference indicator concepts for primary source for current period
+#      c. Reference indicator period references for current period
+#      d. Reference Indicator Collection Versions by period
 #  3. RESOURCES FOR PRIMARY SOURCE
-#      a. DATIM/IHUB data elements, DATIM COCs, and DATIM indicators
+#      a. DATIM/iHUB data elements, DATIM COCs, and DATIM indicators
 #      b. Mappings
 #  4. CODELIST REFERENCES
 #  5. LINKAGES: Version Replacement and Source/Derivation Linkages Mappings
-#  6. ALL REPOSITORY VERSIONS
+#  6. Source and Codelist Collection Versions
 #      a. Primary Source Version
 #      b. Codelist Collection Versions
-#      c. Reference Indicator Period Collection Versions
 #  7. CLEANUP: De-duplicate import list without changing order & leaving 1st occurrence in place
 if settings.OUTPUT_OCL_FORMATTED_JSON:
     import_list = ocldev.oclresourcelist.OclJsonResourceList()
 
-    # 1. ALL REPOSITORIES
+    # 1. Org, Source and Codelist Collections
     # 1.a. Primary Org and Source (eg /orgs/PEPFAR/sources/MER/)
     import_list.append(msp.get_new_org_json(org_id=settings.MSP_ORG_ID))
     import_list.append(msp.get_primary_source(
-        org_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID))
+        org_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID,
+        canonical_url=settings.CANONICAL_URL))
 
-    # 1.b Codelist collections
-    import_list += codelist_collections
+    # 1.b Codelist collections - but first remove the "dhis2_codelist" custom attr
+    for codelist in codelist_collections:
+        if 'extras' in codelist and 'dhis2_codelist' in codelist['extras']:
+            del codelist['extras']['dhis2_codelist']
+        import_list += codelist
 
-    # 1.c. Reference Indicator collections
+    # 2. Reference Indicators by period...
     for period in settings.OUTPUT_PERIODS:
+        # 2.a. Reference indicator collections by period
         period_collection_id = msp.COLLECTION_NAME_MER_REFERENCE_INDICATORS % period
+        canonical_url = '%s/ValueSet/%s' % (settings.CANONICAL_URL, period_collection_id)
         import_list.append(msp.get_new_repo_json(
             owner_id=settings.MSP_ORG_ID,
             repo_type=ocldev.oclconstants.OclConstants.RESOURCE_TYPE_COLLECTION,
             repo_id=period_collection_id,
             name=period_collection_id,
-            full_name=period_collection_id))
+            full_name=period_collection_id,
+            canonical_url=canonical_url))
 
-    # 2. FOR EACH PERIOD...
-    for period in settings.OUTPUT_PERIODS:
-        # Reference indicators by period
+        # 2.b. Reference indicators by period
         import_list += ref_indicator_concepts.get_resources(
             custom_attrs={msp.ATTR_PERIOD: period})
 
-        # Ref indicator collection references by period
+        # 2.c. Ref indicator collection references by period
         if period in ref_indicator_references:
             import_list.append(ref_indicator_references[period])
 
+        # 2.d. Reference Indicator Collection Versions by period
+        period_collection_id = msp.COLLECTION_NAME_MER_REFERENCE_INDICATORS % period
+        import_list.append(msp.get_repo_version_json(
+            owner_id=settings.MSP_ORG_ID,
+            repo_type=ocldev.oclconstants.OclConstants.RESOURCE_TYPE_COLLECTION,
+            repo_id=period_collection_id,
+            version_id='v1.0', description='Auto-generated release'))
+
+
     # 3. RESOURCES FOR PRIMARY SOURCE
-    # 3.a. DATIM/IHUB data elements, DATIM COCs, and DATIM indicators
+    # 3.a. DATIM/iHUB data elements, DATIM COCs, and DATIM indicators
     import_list.append(de_concepts)
     import_list.append(ihub_dde_concepts)
     import_list.append(coc_concepts)
@@ -236,7 +252,7 @@ if settings.OUTPUT_OCL_FORMATTED_JSON:
         map_dict=map_dde_source_linkages, map_type=msp.MSP_MAP_TYPE_DERIVED_FROM,
         owner_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID)
 
-    # 6. REPOSITORY VERSIONS
+    # 6. Source and Codelist Collection Versions
     # 6.a. Primary Source Version
     import_list.append(msp.get_repo_version_json(
         owner_id=settings.MSP_ORG_ID,
@@ -252,27 +268,18 @@ if settings.OUTPUT_OCL_FORMATTED_JSON:
             repo_id=codelist['id'],
             version_id='v1.0', description='Auto-generated release'))
 
-    # 6.c. Reference Indicator Period Collection Versions
-    for period in settings.OUTPUT_PERIODS:
-        period_collection_id = msp.COLLECTION_NAME_MER_REFERENCE_INDICATORS % period
-        import_list.append(msp.get_repo_version_json(
-            owner_id=settings.MSP_ORG_ID,
-            repo_type=ocldev.oclconstants.OclConstants.RESOURCE_TYPE_COLLECTION,
-            repo_id=period_collection_id,
-            version_id='v1.0', description='Auto-generated release'))
-
     # 4. CLEANUP: De-duplicate import list without changing order & leaving 1st occurrence in place
     import_list_dedup = msp.dedup_list_of_dicts(import_list._resources)
 
     # Summarize import list (after deduplication)
     if settings.VERBOSITY:
-        summarize_import_list(import_list)
+        msp.summarize_import_list(import_list)
 
     # Output import list
     if import_list:
-        output_filename = settings.OUTPUT_FILENAME % (
+        OUTPUT_FILENAME = settings.OUTPUT_FILENAME % (
             settings.MSP_ORG_ID, datetime.datetime.today().strftime('%Y%m%d'))
-        with open(output_filename, 'wb') as output_file:
+        with open(OUTPUT_FILENAME, 'wb') as output_file:
             for resource in import_list:
                 output_file.write(json.dumps(resource))
                 output_file.write('\n')
