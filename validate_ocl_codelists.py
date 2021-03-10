@@ -8,7 +8,7 @@ import ocldev.oclexport
 
 # Settings
 api_url_root = 'https://api.staging.openconceptlab.org'
-ocl_api_token = settings.ocl_api_token
+ocl_api_token = settings.OCL_API_TOKEN
 org_id = 'PEPFAR-Test4'
 source_id = 'MER-Test4'
 periods = ['FY16', 'FY17', 'FY18', 'FY19', 'FY20']
