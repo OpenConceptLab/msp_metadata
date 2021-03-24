@@ -1,28 +1,7 @@
 """
-Prepares an OCL bulk import file for MER metadata
-
-COMPLETED FOR ROUND 10:
-* Updated to MER v2.5 / FY21 content:
-    * FY21 MER v2.5 Reference Indicators spreadsheet
-    * FY21 Codelists spreadsheet
-    * DATIM metadata exports retreived 2021-01-06 (DEs, indicators, COCs, dataset)
-    * iHUB Derived Data Elements extract from 2021-02-18
-    * Modified settings.py for FY21
-* Replaced all occurences of PDH with iHUB
-* Applied MSP_ORG_ID to codelist file so that this no longer has to be updated manually
-* Added canonical URLs to MER CodeSystem, Reference Indicator Value Sets, and all DATIM Codelists
-* Modified rules for generating links between a ref indicator and its corresponding data elements
-  and DATIM indicators (some ref indicator codes are in the middle of resource names, not beginning)
-* Generated new "Central Support" PEPFAR Support Type attr for applicable DEs (same as DSD/TA)
-* Removed unnecessary codelist_collections['extras']['dhis2_codelist'] attribute before saving
-  (this attribute is only used during processing)
-* Generated round 10 bulk import script and validated
-* Generated ref indicator collection versions at the end of processing each period instead of at
-  the end (this fixed a bug where a collection sometimes returned a newer version of a concept)
-* ETL script processing updates:
-    * Removed chunking of bulk import file now that oclapi2 can handle large bulk imports
-    * Improved log summary of OCL resource types in the final import script to simplify validation
-    * Updated to latest ocldev package release
+Prepares an OCL bulk import file for MER metadata.
+Example usage:
+  python build_ocl_import.py > logs/build_pepfar_test10b_20210324.log
 """
 import datetime
 import json

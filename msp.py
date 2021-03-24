@@ -473,6 +473,8 @@ def load_codelist_collections(filename='', org_id='', canonical_url='', verbosit
             row['owner_id'] = org_id
             row['canonical_url'] = "%s/ValueSet/%s" % (canonical_url, row['id'])
             dhis2_codelist_url = row.pop('ZenDesk: HTML Link').replace('.html+css', '.json')
+            dhis2_codelist_url += '&paging=false'
+            print '   ', dhis2_codelist_url
             row['attr:dhis2_codelist_url'] = dhis2_codelist_url
 
             # Fetch the codelist from DHSI2

@@ -1,10 +1,16 @@
+"""
+Script to convert all cocdelists saved to an export file (using save_codelists_to_file.py)
+to a CSV. The CSV file contains these columns: dataset, dataelement, shortname, code,
+dataelementuid, dataelementdesc, categoryoptioncombo, categoryoptioncombocode,
+categoryoptioncombouid
+"""
 import json
 import unicodecsv as csv
 import settings
 import msp
 
 
-OUTPUT_FILENAME = 'all_datim_codelists.csv'
+OUTPUT_FILENAME = 'all_datim_codelists_20210324.csv'
 
 
 # Load codelists
