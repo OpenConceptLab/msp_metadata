@@ -1,4 +1,6 @@
 # MER 2.5 Updates
+[See here for previous versions](https://github.com/OpenConceptLab/msp_metadata/wiki/Full-List---MER-Key-Updates-and-Changes)
+
 
 ## New Additions to MER 2.5
 
