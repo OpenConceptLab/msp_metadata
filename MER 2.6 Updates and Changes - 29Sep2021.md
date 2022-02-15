@@ -33,7 +33,7 @@
 * **SC_ARVDISP**: Added two additional pediatric regimen categories: DTG 10 (90-count) and LPV/r 100/25 tabs (60 tabs/bottle).
 
 
-## Adjustments from MER 2.4
+## Adjustments from MER 2.5
 
 ### Changes in Reporting Frequency
 
@@ -44,7 +44,7 @@
 * **PrEP_NEW**: The definition was updated to include individuals enrolled on non-oral forms of PrEP, in alignment with COP Guidance.
 
 
-## Removals from MER 2.4
+## Removals from MER 2.5
 
 ### Retired Indicators
 
