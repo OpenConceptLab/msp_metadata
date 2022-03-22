@@ -1,5 +1,5 @@
 """
-Script to convert all cocdelists saved to an export file (using save_codelists_to_file.py)
+Script to convert all codelists saved to an export file (using save_codelists_to_file.py)
 to a CSV. The CSV file contains these columns: dataset, dataelement, shortname, code,
 dataelementuid, dataelementdesc, categoryoptioncombo, categoryoptioncombocode,
 categoryoptioncombouid

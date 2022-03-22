@@ -99,6 +99,7 @@ DATIM_CODELIST_COLUMNS = [
 
 # Constants for MSP collections -- %s is replaced by period (eg FY19)
 COLLECTION_NAME_MER_REFERENCE_INDICATORS = 'MER_REFERENCE_INDICATORS_%s'
+COLLECTION_NAME_MER_FULL = 'MER_%s'
 
 # Support type constants
 SUPPORT_TYPE_CODES = {
@@ -120,7 +121,8 @@ ATTR_AGGREGATION_TYPE = 'aggregationType'
 
 # Mapping between periods and terms that appear in DATIM indicator names (case-insensitive)
 MAP_PERIOD_TO_INDICATOR_TERMS = {
-    "FY21": ["COP20"],
+    "FY22": ["FY22", "COP21", "COP 21"],
+    "FY21": ["FY21", "2021", "WAD21", "COP20"],
     "FY20": ["FY20", "2020", "WAD20", "FY17-20", "COP19"],
     "FY19": ["FY19", "2019", "WAD19", "FY17-20", "COP18"],
     "FY18": ["FY18", "2018", "WAD18", "FY16-18", "FY17-20", "COP17"],
@@ -384,7 +386,7 @@ def get_new_repo_json(owner_type='Organization', owner_id='', repo_type='Source'
                       name='', full_name='', repo_sub_type='Dictionary', default_locale='en',
                       public_access='View', supported_locales='en', canonical_url=''):
     """ Returns OCL-formatted JSON for a source """
-    source = {
+    repo_json = {
         "name": name,
         "default_locale": default_locale,
         "short_code": repo_id,
@@ -398,8 +400,8 @@ def get_new_repo_json(owner_type='Organization', owner_id='', repo_type='Source'
         "supported_locales": supported_locales
     }
     if canonical_url:
-        source['canonical_url'] = canonical_url
-    return source
+        repo_json['canonical_url'] = canonical_url
+    return repo_json
 
 
 def load_datim_data_elements(filename='', org_id='', source_id='',
@@ -471,10 +473,11 @@ def load_codelist_collections(filename='', org_id='', canonical_url='', verbosit
             if verbosity:
                 print 'Retrieving codelist: %s' % row['id']
             row['owner_id'] = org_id
-            row['canonical_url'] = "%s/ValueSet/%s" % (canonical_url, row['id'])
             dhis2_codelist_url = row.pop('ZenDesk: HTML Link').replace('.html+css', '.json')
             dhis2_codelist_url += '&paging=false'
-            print '   ', dhis2_codelist_url
+            if verbosity:
+                print '  DHIS2 URL: %s' % dhis2_codelist_url
+                print '  Canonical URL:', "%s/ValueSet/%s" % (canonical_url, row['id'])
             row['attr:dhis2_codelist_url'] = dhis2_codelist_url
 
             # Fetch the codelist from DHSI2
@@ -485,6 +488,11 @@ def load_codelist_collections(filename='', org_id='', canonical_url='', verbosit
 
     codelist_csv_resource_list = ocldev.oclresourcelist.OclCsvResourceList(resources=csv_codelists)
     codelist_json_resource_list = codelist_csv_resource_list.convert_to_ocl_formatted_json()
+
+    # Fields not supported in the CSV format get added here
+    for codelist in codelist_json_resource_list:
+        codelist['canonical_url'] = "%s/ValueSet/%s" % (canonical_url, codelist['id'])
+
     return codelist_json_resource_list
 
 
@@ -707,8 +715,8 @@ def get_concepts_filtered_by_period(concepts=None, period=None):
     """
     Returns a list of concepts filtered by ATTR_PERIOD or ATTR_APPLICABLE_PERIODS
     custom attributes. Period filter may be a single period (eg 'FY18') or
-    a list of periods (eg ['FY18', 'FY19']). Works with ref_indicator_concepts and data
-    elements for both DATIM and iHUB.
+    a list of periods (eg ['FY18', 'FY19']). Works with ref_indicator_concepts, datim indicator
+    concepts and data elements for both DATIM and iHUB.
     """
 
     # Get period filter into the right format
@@ -831,8 +839,8 @@ def build_ref_indicator_references(ref_indicator_concepts, org_id=''):
     Return a dictionary with period as key and OCL-formatted reference as value representing the
     set of reference indicators that are valid for each period. Eg:
         {"FY18": {"type": "Reference", "owner": "PEPFAR", "owner_type": "Organization",
-                  "collection": "MER_Reference_Indicators_FY18",
-                  "data": {"expressions": "/orgs/PEPFAR/sources/MER/concepts/HTS_TST/"}}}
+                  "collection": "MER_REFERENCE_INDICATORS_FY18",
+                  "data": {"expressions": "/orgs/PEPFAR/sources/MER/concepts/HTS_TST/", ...}}}
     """
     output_references_by_period = {}
     ref_indicator_period_counts = ref_indicator_concepts.summarize(custom_attr_key=ATTR_PERIOD)
@@ -840,6 +848,148 @@ def build_ref_indicator_references(ref_indicator_concepts, org_id=''):
         expressions = [
             ref_indicator_concept['__url'] for ref_indicator_concept in
             ref_indicator_concepts.get_resources(custom_attrs={ATTR_PERIOD: period})]
+        output_references_by_period[period] = {
+            'type': ocldev.oclconstants.OclConstants.RESOURCE_TYPE_REFERENCE,
+            'owner': org_id,
+            'owner_type': ocldev.oclconstants.OclConstants.RESOURCE_TYPE_ORGANIZATION,
+            'collection': COLLECTION_NAME_MER_REFERENCE_INDICATORS % period,
+            'data': {'expressions': expressions}
+        }
+    return output_references_by_period
+
+
+def build_fiscal_year_references(ref_indicator_concepts, datim_indicator_concepts, de_concepts,
+                                 ihub_dde_concepts, coc_concepts, map_ref_indicator_to_de,
+                                 map_ref_indicator_to_ihub_dde,
+                                 map_ref_indicator_to_datim_indicator,
+                                 map_de_to_coc, map_ihub_dde_to_coc,
+                                 org_id='', source_id=''):
+    """
+    Return a dictionary with period as key and OCL-formatted reference as value representing
+    all resources that can be associated with that period. Includes everything but reference
+    indicators (i.e. date elements, DATIM indicators, and COCs). Reference indicators are
+    excluded because they are simply a copy of the MER_REFERENCE_INDICATOR_FY## collections
+    and they are processed at a different time than the remaining references defined here.
+
+    for each ref indicator in the period...
+    1.  Cascade each Reference Indicator concept version to Indicator concepts using
+        Has DATIM Indicator mappings where target_concept.extras.Applicable+Periods=FY20
+    2.  Cascade each Reference Indicator concept version to Data Element concepts using
+        Has Data Element mappings where target_concept.extras.Applicable+Periods=FY20
+        2a. Cascade each DE concept to Category Option Combo concepts using Has Option mappings
+
+    Example output:
+        {"FY18": {"type": "Reference", "owner": "PEPFAR", "owner_type": "Organization",
+                  "collection": "MER_FY18",
+                  "data": {"expressions": "/orgs/PEPFAR/sources/MER/concepts/XHBL1mOwLWb/", ...}}}
+    """
+    output_references_by_period = {}
+    ref_indicator_period_counts = ref_indicator_concepts.summarize(custom_attr_key=ATTR_PERIOD)
+    for period in ref_indicator_period_counts.keys():
+        expressions = []
+        ref_indicator_concepts.get_resources(custom_attrs={ATTR_PERIOD: period})
+        for ref_indicator_concept in ref_indicator_concepts:
+            # datim indicators
+            ref_indicator_url = ref_indicator_concept['__url']
+            if ref_indicator_url in map_ref_indicator_to_datim_indicator:
+                for datim_indicator_url in map_ref_indicator_to_datim_indicator[ref_indicator_url]:
+                    datim_indicator_concept = datim_indicator_concepts.get_resource_by_url(
+                        datim_indicator_url)
+                    if not datim_indicator_concept:
+                        continue
+                    if ('extras' in datim_indicator_concept and
+                            ATTR_APPLICABLE_PERIODS in datim_indicator_concept['extras'] and
+                            period in datim_indicator_concept["extras"][ATTR_APPLICABLE_PERIODS]):
+                        # add the datim indicator
+                        if datim_indicator_url not in expressions:
+                            expressions.append(datim_indicator_url)
+
+                        # add the mapping
+                        mapping_id = generate_mapping_id(
+                            from_concept_url=ref_indicator_url, to_concept_url=datim_indicator_url,
+                            id_format=MSP_MAP_ID_FORMAT_REFIND_IND)
+                        mapping_url = '/orgs/%s/sources/%s/mappings/%s/' % (
+                            org_id, source_id, mapping_id)
+                        if mapping_url not in expressions:
+                            expressions.append(mapping_url)
+
+            # data elements
+            if ref_indicator_url in map_ref_indicator_to_de:
+                for de_url in map_ref_indicator_to_de[ref_indicator_url]:
+                    de_concept = de_concepts.get_resource_by_url(de_url)
+                    if not de_concept:
+                        continue
+                    if ('extras' in de_concept and
+                            ATTR_APPLICABLE_PERIODS in de_concept['extras'] and
+                            period in de_concept["extras"][ATTR_APPLICABLE_PERIODS]):
+                        # add the data element
+                        if de_url not in expressions:
+                            expressions.append(de_url)
+
+                        # add the mapping
+                        mapping_id = generate_mapping_id(
+                            from_concept_url=ref_indicator_url, to_concept_url=de_url,
+                            id_format=MSP_MAP_ID_FORMAT_REFIND_DE)
+                        mapping_url = '/orgs/%s/sources/%s/mappings/%s/' % (
+                            org_id, source_id, mapping_id)
+                        if mapping_url not in expressions:
+                            expressions.append(mapping_url)
+
+                        # cascade the COCs
+                        if de_url in map_de_to_coc:
+                            for coc_url in map_de_to_coc[de_url]:
+                                # add the coc
+                                if coc_url not in expressions:
+                                    expressions.append(coc_url)
+
+                                # add the mapping
+                                mapping_id = generate_mapping_id(
+                                    from_concept_url=de_url, to_concept_url=coc_url,
+                                    id_format=MSP_MAP_ID_FORMAT_DE_COC)
+                                mapping_url = '/orgs/%s/sources/%s/mappings/%s/' % (
+                                    org_id, source_id, mapping_id)
+                                if mapping_url not in expressions:
+                                    expressions.append(mapping_url)
+
+            # iHUB derived data elements
+            if ref_indicator_url in map_ref_indicator_to_ihub_dde:
+                for ihub_dde_url in map_ref_indicator_to_ihub_dde[ref_indicator_url]:
+                    ihub_dde_concept = de_concepts.get_resource_by_url(ihub_dde_url)
+                    if not ihub_dde_concept:
+                        continue
+                    if ('extras' in ihub_dde_concept and
+                            ATTR_APPLICABLE_PERIODS in ihub_dde_concept['extras'] and
+                            period in ihub_dde_concept["extras"][ATTR_APPLICABLE_PERIODS]):
+                        # add the ihub derived data element
+                        if ihub_dde_url not in expressions:
+                            expressions.append(ihub_dde_url)
+
+                        # add the mapping
+                        mapping_id = generate_mapping_id(
+                            from_concept_url=ref_indicator_url, to_concept_url=ihub_dde_url,
+                            id_format=MSP_MAP_ID_FORMAT_REFIND_DE)
+                        mapping_url = '/orgs/%s/sources/%s/mappings/%s/' % (
+                            org_id, source_id, mapping_id)
+                        if mapping_url not in expressions:
+                            expressions.append(mapping_url)
+
+                        # cascade the COCs
+                        get_mapped_concept_references_by_period()
+                        if ihub_dde_url in map_ihub_dde_to_coc:
+                            for coc_url in map_ihub_dde_to_coc[ihub_dde_url]:
+                                # add the coc
+                                if coc_url not in expressions:
+                                    expressions.append(coc_url)
+
+                                # add the mapping
+                                mapping_id = generate_mapping_id(
+                                    from_concept_url=ihub_dde_url, to_concept_url=coc_url,
+                                    id_format=MSP_MAP_ID_FORMAT_DE_COC)
+                                mapping_url = '/orgs/%s/sources/%s/mappings/%s/' % (
+                                    org_id, source_id, mapping_id)
+                                if mapping_url not in expressions:
+                                    expressions.append(mapping_url)
+
         output_references_by_period[period] = {
             'type': ocldev.oclconstants.OclConstants.RESOURCE_TYPE_REFERENCE,
             'owner': org_id,
@@ -1047,9 +1197,6 @@ def build_mer_references(de_concepts=None, map_de_to_coc=None,
     # NOTE: There is an overlap between data elements in iHUB and DATIM, because
     # some DATIM DEs were replaced by derived DEs. This means that some DATIM DEs are
     # referenced in an iHUB run_sequence but are not marked as sourced from DATIM.
-    # print '%d + %d = %d' % (len(de_concepts), len(ihub_dde_concepts), len(combined_de_concepts))
-    # print '%d + %d = %d' % (
-    #     len(map_de_to_coc), len(map_ihub_dde_to_coc), len(combined_de_to_coc_maps))
 
     mer_references = get_mapped_concept_references_by_period(
         from_concepts=combined_de_concepts, map_dict=combined_de_to_coc_maps,

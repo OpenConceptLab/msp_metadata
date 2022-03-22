@@ -1,7 +1,25 @@
 """
 Prepares an OCL bulk import file for MER metadata.
+
+What's next:
+* Add update comments for reference indicators to appear in concept version history
+    * Added to ref indicator CSVs -- next up is to test if comments are imported
+* Create new collection per FY with ALL content associated with that FY, in addition
+  to the collections that already do this for Ref Indicators
+* Create new collection with ALL content that cannot be associated with a FY
+
+The following steps must be completed to run this script for a new Fiscal Year:
+* settings.py updated for new FY
+* Reference indicators manually compiled and exported as CSV
+* DATIM DEs, COCs, and indicators exported from DATIM
+* Codelists manually compiled and synced with DATIM datasets
+* Codelist export from DATIM
+* iHUB export
+* Update indicator applicable period keywords for new FY (msp.py:122)
+* Clean reference indicator narrative
+
 Example usage:
-  python build_ocl_import.py > logs/build_pepfar_test10b_20210324.log
+  python build_ocl_import.py > logs/build_pepfar_mer_fy22_20220131.log
 """
 import datetime
 import json
@@ -12,10 +30,10 @@ import msp
 
 
 # LOAD METADATA SOURCES
-# 1. ref_indicator_concepts -- OclJsonResourceList of FY16-20 reference indicator concepts
+# 1. ref_indicator_concepts -- OclJsonResourceList of FY16-21 reference indicator concepts
 # 2. sorted_ref_indicator_codes -- De-duped list of indicator codes sorted by length descending
 # 3. coc_concepts -- OclJsonResourceList of DATIM category option combo (COC) concepts
-# 4. codelist_collections -- OclJsonResourceList of FY16-20 Codelist Collections
+# 4. codelist_collections -- OclJsonResourceList of FY16-21 Codelist Collections
 # 5. de_concepts -- OclJsonResourceList of DATIM Data Element (DE) concepts
 # 6. datim_indicator_concepts -- OclJsonResourceList DATIM Indicator concepts
 # 7. ihub_dde_concepts -- OclJsonResourceList of iHUB Derived Data Element (DDE) concepts
@@ -95,13 +113,23 @@ map_dde_source_linkages = msp.build_linkages_source_de(
 # 1. ref_indicator_references -- List of ref indicator references grouped by period
 # 2. codelist_references -- List of OCL-formatted reference batches to
 #       all DEs, COCs, and mappings between them
+# 3. fiscal_year_references -- List of references for all resources grouped per fiscal year.
+#       Includes ref indicator versions, DATIM/iHUB data elements, DATIM indicators, disags.
 ref_indicator_references = msp.build_ref_indicator_references(
     ref_indicator_concepts=ref_indicator_concepts, org_id=settings.MSP_ORG_ID)
 codelist_references = msp.build_codelist_references(
     map_codelist_to_de_to_coc=map_codelist_to_de_to_coc,
     org_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID,
     codelist_collections=codelist_collections)
-
+fiscal_year_references = msp.build_fiscal_year_references(
+    ref_indicator_concepts=ref_indicator_concepts,
+    datim_indicator_concepts=datim_indicator_concepts,
+    de_concepts=de_concepts, ihub_dde_concepts=ihub_dde_concepts, coc_concepts=coc_concepts,
+    map_ref_indicator_to_de=map_ref_indicator_to_de,
+    map_ref_indicator_to_ihub_dde=map_ref_indicator_to_ihub_dde,
+    map_ref_indicator_to_datim_indicator=map_ref_indicator_to_datim_indicator,
+    map_de_to_coc=map_de_to_coc, map_ihub_dde_to_coc=map_ihub_dde_to_coc,
+    org_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID)
 
 # Summarize metadata loaded
 if settings.VERBOSITY:
@@ -154,41 +182,60 @@ if settings.OUTPUT_OCL_FORMATTED_JSON:
         org_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID,
         canonical_url=settings.CANONICAL_URL))
 
-    # 1.b Codelist collections - but first remove the "dhis2_codelist" custom attr
+    # 1.b Codelist collections - but 1st remove "dhis2_codelist" custom attr used for processing
     for codelist in codelist_collections:
         if 'extras' in codelist and 'dhis2_codelist' in codelist['extras']:
             del codelist['extras']['dhis2_codelist']
         import_list += codelist
 
-    # 2. Reference Indicators by period...
+    # 2. Period-based collections:
+    #    - MER_REFERENCE_INDICATORS_FY##: Reference indicators only
+    #    - MER_FY##: Reference indicators, data elements, DATIM indicators, & disags
     for period in settings.OUTPUT_PERIODS:
-        # 2.a. Reference indicator collections by period
-        period_collection_id = msp.COLLECTION_NAME_MER_REFERENCE_INDICATORS % period
-        canonical_url = '%s/ValueSet/%s' % (settings.CANONICAL_URL, period_collection_id)
+        # 2.a. Generate the collection definitions
+        id_mer_reference_indicator_collection = msp.COLLECTION_NAME_MER_REFERENCE_INDICATORS % period
+        id_mer_full_collection = msp.COLLECTION_NAME_MER_FULL % period
         import_list.append(msp.get_new_repo_json(
             owner_id=settings.MSP_ORG_ID,
             repo_type=ocldev.oclconstants.OclConstants.RESOURCE_TYPE_COLLECTION,
-            repo_id=period_collection_id,
-            name=period_collection_id,
-            full_name=period_collection_id,
-            canonical_url=canonical_url))
+            repo_id=id_mer_reference_indicator_collection,
+            name=id_mer_reference_indicator_collection,
+            full_name=id_mer_reference_indicator_collection,
+            canonical_url='%s/ValueSet/%s' % (
+                settings.CANONICAL_URL, id_mer_reference_indicator_collection)))
+        import_list.append(msp.get_new_repo_json(
+            owner_id=settings.MSP_ORG_ID,
+            repo_type=ocldev.oclconstants.OclConstants.RESOURCE_TYPE_COLLECTION,
+            repo_id=id_mer_full_collection,
+            name=id_mer_full_collection,
+            full_name=id_mer_full_collection,
+            canonical_url='%s/ValueSet/%s' % (
+                settings.CANONICAL_URL, id_mer_full_collection)))
 
-        # 2.b. Reference indicators by period
+        # 2.b. Reference indicator concept definitions by period in the MER source (needed only 1x)
+        #      These must be processed sequentially according to period.
         import_list += ref_indicator_concepts.get_resources(
             custom_attrs={msp.ATTR_PERIOD: period})
 
-        # 2.c. Ref indicator collection references by period
+        # 2.c. Add period-specific references to ref indicator concepts -- These must be
+        #      processed sequentially by period.
         if period in ref_indicator_references:
             import_list.append(ref_indicator_references[period])
+            period_references_copy = ref_indicator_references[period].copy()
+            period_references_copy['collection'] = msp.COLLECTION_NAME_MER_FULL % period
+            import_list.append(period_references_copy)
 
-        # 2.d. Reference Indicator Collection Versions by period
-        period_collection_id = msp.COLLECTION_NAME_MER_REFERENCE_INDICATORS % period
+        # 2.d. Collection Versions by period
         import_list.append(msp.get_repo_version_json(
             owner_id=settings.MSP_ORG_ID,
             repo_type=ocldev.oclconstants.OclConstants.RESOURCE_TYPE_COLLECTION,
-            repo_id=period_collection_id,
+            repo_id=msp.COLLECTION_NAME_MER_REFERENCE_INDICATORS % period,
             version_id='v1.0', description='Auto-generated release'))
-
+        import_list.append(msp.get_repo_version_json(
+            owner_id=settings.MSP_ORG_ID,
+            repo_type=ocldev.oclconstants.OclConstants.RESOURCE_TYPE_COLLECTION,
+            repo_id=msp.COLLECTION_NAME_MER_FULL % period,
+            version_id='v1.0', description='Auto-generated release'))
 
     # 3. RESOURCES FOR PRIMARY SOURCE
     # 3.a. DATIM/iHUB data elements, DATIM COCs, and DATIM indicators
@@ -220,8 +267,9 @@ if settings.OUTPUT_OCL_FORMATTED_JSON:
         owner_id=settings.MSP_ORG_ID, source_id=settings.MSP_SOURCE_ID,
         do_generate_mapping_id=True, id_format=msp.MSP_MAP_ID_FORMAT_DE_COC))
 
-    # 4. CODELIST REFERENCES
+    # 4. CODELIST AND MER_FY## REFERENCES
     import_list += codelist_references
+    import_list += fiscal_year_references
 
     # 5. LINKAGES: Version Replacement and Source/Derivation Linkages Mappings
     import_list += msp.build_ocl_mappings(

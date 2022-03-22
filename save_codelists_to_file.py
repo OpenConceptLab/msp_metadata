@@ -1,5 +1,8 @@
 """
 Saves codelist exports retreived from DHIS2 in the OCL collection format.
+The input into this is a spreadsheet in the format of 
+/data/codelists_RT_FY21_22_20220131.csv. The output is a large JSON file
+containing the codelists as OCL-formatted collections.
 """
 import json
 import settings
