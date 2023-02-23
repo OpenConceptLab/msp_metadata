@@ -1,8 +1,8 @@
 """
 Script to convert all codelists saved to an export file (using save_codelists_to_file.py)
-to a CSV. The CSV file contains these columns: dataset, dataelement, shortname, code,
-dataelementuid, dataelementdesc, categoryoptioncombo, categoryoptioncombocode,
-categoryoptioncombouid
+to a single CSV designed to be more human-readable. The CSV file contains these columns:
+dataset, dataelement, shortname, code, dataelementuid, dataelementdesc, categoryoptioncombo,
+categoryoptioncombocode, categoryoptioncombouid
 """
 import json
 import unicodecsv as csv
@@ -10,7 +10,7 @@ import settings
 import msp
 
 
-OUTPUT_FILENAME = 'all_datim_codelists_20210324.csv'
+OUTPUT_FILENAME = 'all_datim_codelists_20220413.csv'
 
 
 # Load codelists

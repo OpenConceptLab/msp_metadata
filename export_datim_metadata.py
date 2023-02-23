@@ -39,14 +39,14 @@ for export_key in DATIM_EXPORTS:
     export_filename = 'data/datim_%s_%s.%s' % (
         export_key, datetime.datetime.today().strftime('%Y%m%d'),
         DATIM_EXPORTS[export_key]['fileType'])
-    print '\n****', export_key, '\n', DATIM_EXPORTS[export_key]['url']
+    print('\n****', export_key, '\n', DATIM_EXPORTS[export_key]['url'])
     r = requests.get(
         DATIM_EXPORTS[export_key]['url'],
         auth=(settings.DATIM_USERNAME, settings.DATIM_PASSWORD))
     r.raise_for_status()
     if '.json?' in DATIM_EXPORTS[export_key]['url']:
         results = r.json()
-        print '%s resources successfully retrieved from DATIM:' % str(len(results[export_key]))
+        print('%s resources successfully retrieved from DATIM:' % str(len(results[export_key])))
     with open(export_filename, mode='wb') as localfile:
         localfile.write(r.content)
-    print 'Content saved to %s' % export_filename
+    print('Content saved to %s' % export_filename)

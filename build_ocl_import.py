@@ -2,18 +2,18 @@
 Prepares an OCL bulk import file for MER metadata.
 
 What's next:
-* Add update comments for reference indicators to appear in concept version history
-    * Added to ref indicator CSVs -- next up is to test if comments are imported
-* Create new collection per FY with ALL content associated with that FY, in addition
-  to the collections that already do this for Ref Indicators
-* Create new collection with ALL content that cannot be associated with a FY
+* Finish MER Metadata Report
+* Verify that all coded fields (e.g. Reporting Level) have valid coded values
+* Change log output to be in JSON format -- report creation should consume the JSON log output
+* Add MER_FY## collections to log output
 
 The following steps must be completed to run this script for a new Fiscal Year:
 * settings.py updated for new FY
-* Reference indicators manually compiled and exported as CSV
-* DATIM DEs, COCs, and indicators exported from DATIM
-* Codelists manually compiled and synced with DATIM datasets
-* Codelist export from DATIM
+* Reference indicators manually compiled and exported as CSV (eg mer_indicators_FY23_20230223.csv)
+* DATIM DEs, COCs, and indicators exported from DATIM: python export_datim_metadata.py
+* Codelists manually compiled and synced with DATIM datasets -- add latest DATIM dataset export
+  into the metadata spreadsheet and apply new VLOOKUP
+* Codelist export from DATIM (python save_codelists_to_file.py)
 * iHUB export
 * Update indicator applicable period keywords for new FY (msp.py:122)
 * Clean reference indicator narrative
@@ -30,10 +30,10 @@ import msp
 
 
 # LOAD METADATA SOURCES
-# 1. ref_indicator_concepts -- OclJsonResourceList of FY16-21 reference indicator concepts
+# 1. ref_indicator_concepts -- OclJsonResourceList of all reference indicator concept versions
 # 2. sorted_ref_indicator_codes -- De-duped list of indicator codes sorted by length descending
 # 3. coc_concepts -- OclJsonResourceList of DATIM category option combo (COC) concepts
-# 4. codelist_collections -- OclJsonResourceList of FY16-21 Codelist Collections
+# 4. codelist_collections -- OclJsonResourceList of all Codelist Collections
 # 5. de_concepts -- OclJsonResourceList of DATIM Data Element (DE) concepts
 # 6. datim_indicator_concepts -- OclJsonResourceList DATIM Indicator concepts
 # 7. ihub_dde_concepts -- OclJsonResourceList of iHUB Derived Data Element (DDE) concepts
@@ -114,7 +114,8 @@ map_dde_source_linkages = msp.build_linkages_source_de(
 # 2. codelist_references -- List of OCL-formatted reference batches to
 #       all DEs, COCs, and mappings between them
 # 3. fiscal_year_references -- List of references for all resources grouped per fiscal year.
-#       Includes ref indicator versions, DATIM/iHUB data elements, DATIM indicators, disags.
+#       Includes data elements, DATIM indicators, disags. Reference indicators are added
+#       by reusing the ref_indicator_references object above
 ref_indicator_references = msp.build_ref_indicator_references(
     ref_indicator_concepts=ref_indicator_concepts, org_id=settings.MSP_ORG_ID)
 codelist_references = msp.build_codelist_references(
@@ -191,6 +192,7 @@ if settings.OUTPUT_OCL_FORMATTED_JSON:
     # 2. Period-based collections:
     #    - MER_REFERENCE_INDICATORS_FY##: Reference indicators only
     #    - MER_FY##: Reference indicators, data elements, DATIM indicators, & disags
+    period_collection_versions = []
     for period in settings.OUTPUT_PERIODS:
         # 2.a. Generate the collection definitions
         id_mer_reference_indicator_collection = msp.COLLECTION_NAME_MER_REFERENCE_INDICATORS % period
@@ -225,13 +227,13 @@ if settings.OUTPUT_OCL_FORMATTED_JSON:
             period_references_copy['collection'] = msp.COLLECTION_NAME_MER_FULL % period
             import_list.append(period_references_copy)
 
-        # 2.d. Collection Versions by period
-        import_list.append(msp.get_repo_version_json(
+        # 2.d. Define Collection Versions by period (but don't yet add to the import_list)
+        period_collection_versions.append(msp.get_repo_version_json(
             owner_id=settings.MSP_ORG_ID,
             repo_type=ocldev.oclconstants.OclConstants.RESOURCE_TYPE_COLLECTION,
             repo_id=msp.COLLECTION_NAME_MER_REFERENCE_INDICATORS % period,
             version_id='v1.0', description='Auto-generated release'))
-        import_list.append(msp.get_repo_version_json(
+        period_collection_versions.append(msp.get_repo_version_json(
             owner_id=settings.MSP_ORG_ID,
             repo_type=ocldev.oclconstants.OclConstants.RESOURCE_TYPE_COLLECTION,
             repo_id=msp.COLLECTION_NAME_MER_FULL % period,
@@ -269,7 +271,8 @@ if settings.OUTPUT_OCL_FORMATTED_JSON:
 
     # 4. CODELIST AND MER_FY## REFERENCES
     import_list += codelist_references
-    import_list += fiscal_year_references
+    for period in fiscal_year_references.keys():
+        import_list.append(fiscal_year_references[period])
 
     # 5. LINKAGES: Version Replacement and Source/Derivation Linkages Mappings
     import_list += msp.build_ocl_mappings(
@@ -294,6 +297,9 @@ if settings.OUTPUT_OCL_FORMATTED_JSON:
             repo_type=ocldev.oclconstants.OclConstants.RESOURCE_TYPE_COLLECTION,
             repo_id=codelist['id'],
             version_id='v1.0', description='Auto-generated release'))
+
+    # 6.c. Period-specific collection versions
+    import_list += period_collection_versions
 
     # 4. CLEANUP: De-duplicate import list without changing order & leaving 1st occurrence in place
     import_list_dedup = msp.dedup_list_of_dicts(import_list._resources)
