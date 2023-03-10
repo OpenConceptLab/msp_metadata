@@ -8,7 +8,7 @@ What's next:
 * Add MER_FY## collections to log output
 
 The following steps must be completed to run this script for a new Fiscal Year:
-* settings.py updated for new FY
+* Update settings.py for new FY
 * Reference indicators manually compiled and exported as CSV (eg mer_indicators_FY23_20230223.csv)
 * DATIM DEs, COCs, and indicators exported from DATIM: python export_datim_metadata.py
 * Codelists manually compiled and synced with DATIM datasets -- add latest DATIM dataset export
@@ -57,6 +57,7 @@ de_concepts = msp.load_datim_data_elements(
     filename=settings.FILENAME_DATIM_DATA_ELEMENTS, org_id=settings.MSP_ORG_ID,
     source_id=settings.MSP_SOURCE_ID, sorted_ref_indicator_codes=sorted_ref_indicator_codes,
     codelist_collections=codelist_collections, ref_indicator_concepts=ref_indicator_concepts)
+
 datim_indicator_concepts = msp.load_datim_indicators(
     filename=settings.FILENAME_DATIM_INDICATORS, org_id=settings.MSP_ORG_ID,
     source_id=settings.MSP_SOURCE_ID, de_concepts=de_concepts, coc_concepts=coc_concepts,
@@ -108,7 +109,6 @@ map_dde_source_linkages = msp.build_linkages_source_de(
     ihub_dde_concepts=ihub_dde_concepts, owner_id=settings.MSP_ORG_ID,
     source_id=settings.MSP_SOURCE_ID)
 
-
 # GENERATE VALUE SET REFERENCES
 # 1. ref_indicator_references -- List of ref indicator references grouped by period
 # 2. codelist_references -- List of OCL-formatted reference batches to
@@ -153,7 +153,6 @@ if settings.VERBOSITY:
         map_dde_source_linkages=map_dde_source_linkages,
         ref_indicator_references=ref_indicator_references,
         codelist_references=codelist_references)
-
 
 # OUTPUT OCL-FORMATTED JSON
 #  1. Org, Source and Codelist Collections
@@ -312,7 +311,7 @@ if settings.OUTPUT_OCL_FORMATTED_JSON:
     if import_list:
         OUTPUT_FILENAME = settings.OUTPUT_FILENAME % (
             settings.MSP_ORG_ID, datetime.datetime.today().strftime('%Y%m%d'))
-        with open(OUTPUT_FILENAME, 'wb') as output_file:
+        with open(OUTPUT_FILENAME, 'wt', encoding='utf-8') as output_file:
             for resource in import_list:
                 output_file.write(json.dumps(resource))
                 output_file.write('\n')

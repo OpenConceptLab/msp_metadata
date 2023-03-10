@@ -211,7 +211,10 @@ def display_input_metadata_summary(verbosity=1, input_periods=None, ref_indicato
                 for result_target_type in ['Result', 'Target']:
                     filtered_codelists = period_codelist_collections.get_resources(
                         custom_attrs={ATTR_RESULT_TARGET: result_target_type})
-                    print('        %s: %s' % (result_target_type, len(filtered_codelists)))
+                    if filtered_codelists:
+                        print('        %s: %s' % (result_target_type, len(filtered_codelists)))
+                    else:
+                        print('        %s: None' % (result_target_type))
                     for codelist in filtered_codelists:
                         if codelist['external_id'] in map_codelist_to_de_to_coc:
                             print('          %s: %s data elements' % (
@@ -470,7 +473,6 @@ def load_codelist_collections(filename='', org_id='', canonical_url='', verbosit
             # Skip rows that are not set to be imported
             if not row['resource_type']:
                 continue
-            row['id'] = format_identifier(unformatted_id=row['id'])
             if verbosity:
                 print('Retrieving codelist: %s' % row['id'])
             row['owner_id'] = org_id
@@ -549,13 +551,15 @@ def load_ihub_dde_concepts(filename='', num_run_sequences=3, org_id='',
 
     # Load raw iHUB extract
     ihub_raw = []
-    with open(filename) as ifile:
-        reader = csv.DictReader(ifile)
+    with open(filename) as input_csv_file:
+        reader = csv.DictReader(input_csv_file)
         for row in reader:
             # JP: Some iHUB exports contain extra unicode characters at the beginning of the
             # file that python v2 doesn't handle well, so I'm removing them here
             if '\xef\xbb\xbfindicator' in row:
                 row['indicator'] = row['\xef\xbb\xbfindicator']
+            elif '\ufeffindicator' in row:
+                row['indicator'] = row['\ufeffindicator']
             ihub_raw.append(row)
 
     # Transform to OCL-formatted concepts and return
@@ -663,7 +667,7 @@ def lookup_reference_indicator_code(resource_name='', resource_code='',
                 resource_name[:len(ref_indicator_code)] == ref_indicator_code or
                 ' %s ' % (ref_indicator_code) in resource_name):
             if resource_applicable_periods:
-                for period in resource_applicable_periods[::-1]:
+                for period in reversed(resource_applicable_periods):
                     ref_indicator_concept = ref_indicator_concepts.get_resource(
                         core_attrs={'id': ref_indicator_code}, custom_attrs={ATTR_PERIOD: period})
                     if ref_indicator_concept:
@@ -680,8 +684,7 @@ def get_sorted_unique_indicator_codes(ref_indicator_concepts=None):
     OCL-formatted reference indicators
     """
     output = ref_indicator_concepts.summarize(core_attr_key='id').keys()
-    output.sort(key=len, reverse=True)
-    return output
+    return sorted(output, reverse=True)
 
 
 def get_data_element_version(de_code=''):
@@ -721,7 +724,7 @@ def get_de_periods_from_codelist_collections(de_codelists, codelist_collections)
                 for period in codelist_def['extras'][ATTR_APPLICABLE_PERIODS].split(', '):
                     periods[period] = True
                 break
-    return periods.keys()
+    return list(periods.keys())
 
 
 def get_concepts_filtered_by_period(concepts=None, period=None):
@@ -733,9 +736,9 @@ def get_concepts_filtered_by_period(concepts=None, period=None):
     """
 
     # Get period filter into the right format
-    if isinstance(period, basestring):
+    if isinstance(period, str):
         period = [period]
-    elif isinstance(period, list) and all(isinstance(item, basestring) for item in period):
+    elif isinstance(period, list) and all(isinstance(item, str) for item in period):
         pass
     else:
         # Invalid period filter so just return an empty list
@@ -764,7 +767,7 @@ def get_concepts_filtered_by_period(concepts=None, period=None):
             elif isinstance(concept_period, list):
                 if filter_period in concept_period:
                     filtered_concepts.append(concept)
-            elif isinstance(concept_period, basestring):
+            elif isinstance(concept_period, str):
                 if filter_period == concept_period:
                     filtered_concepts.append(concept)
             else:
@@ -787,9 +790,9 @@ def get_filtered_cocs(de_concepts=None, map_de_to_coc=None, coc_concepts=None):
 
 def get_filtered_codelist_collections(codelist_collections=None, period=None):
     """ Returns list of code lists filtered by either a single period or a list of periods """
-    if isinstance(period, basestring):
+    if isinstance(period, str):
         period = [period]
-    elif isinstance(period, list) and all(isinstance(item, basestring) for item in period):
+    elif isinstance(period, list) and all(isinstance(item, str) for item in period):
         pass
     else:
         return []
@@ -1021,7 +1024,7 @@ def build_codelist_references(map_codelist_to_de_to_coc=None, org_id='', source_
             core_attrs={'external_id': codelist_external_id})
         if codelist:
             codelist_references += get_mapped_concept_references(
-                from_concept_urls=map_codelist_to_de_to_coc[codelist_external_id].keys(),
+                from_concept_urls=list(map_codelist_to_de_to_coc[codelist_external_id].keys()),
                 map_dict=map_codelist_to_de_to_coc[codelist_external_id],
                 org_id=org_id, source_id=source_id, collection_id=codelist['id'],
                 do_cascade_source_mappings=False,
@@ -1221,7 +1224,7 @@ def build_mer_references(de_concepts=None, map_de_to_coc=None,
 def get_repo_version_json(owner_type='Organization', owner_id='', repo_type='Source',
                           repo_id='', version_id='', description='', released=True):
     """ Returns OCL-formatted JSON for a repository version """
-    if not isinstance(repo_id, basestring):
+    if not isinstance(repo_id, str):
         raise TypeError("String expected for repo_id. %s given." % type(repo_id))
     return {
         'type': '%s Version' % repo_type,
@@ -1739,7 +1742,7 @@ def get_de_reporting_frequency(de_name='', de_result_or_target='', de_indicator_
         return 'Annually'
     elif de_indicator_code:
         if de_applicable_periods:
-            for period in de_applicable_periods[::-1]:
+            for period in reversed(de_applicable_periods):
                 ref_indicator_concept = ref_indicator_concepts.get_resource(
                     core_attrs={'id': de_indicator_code}, custom_attrs={ATTR_PERIOD: period})
                 if (ref_indicator_concept and

@@ -33,4 +33,4 @@ with open(OUTPUT_FILENAME, 'w') as csvfile:
             # print json.dumps(codelist_row)
             writer.writerow(codelist_row)
 
-print "Codelists saved to: %s" % OUTPUT_FILENAME
+print("Codelists saved to: %s" % (OUTPUT_FILENAME))
